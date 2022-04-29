@@ -26,17 +26,20 @@ import java.util.Objects;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
+import org.springframework.beans.BeansException;
 import org.springframework.context.ApplicationContext;
+import org.springframework.context.ApplicationContextAware;
 import org.springframework.context.ApplicationListener;
 import org.springframework.context.event.ContextRefreshedEvent;
 import org.springframework.kafka.listener.ExceptionClassifier;
 import org.springframework.kafka.listener.ListenerExecutionFailedException;
 import org.springframework.kafka.listener.TimestampedException;
+import org.springframework.lang.Nullable;
 
 
 /**
  *
- * Default implementation of the DestinationTopicResolver interface.
+ * Default implementation of the {@link DestinationTopicResolver} interface.
  * The container is closed when a {@link ContextRefreshedEvent} is received
  * and no more destinations can be added after that.
  *
@@ -47,7 +50,7 @@ import org.springframework.kafka.listener.TimestampedException;
  *
  */
 public class DefaultDestinationTopicResolver extends ExceptionClassifier
-		implements DestinationTopicResolver, ApplicationListener<ContextRefreshedEvent> {
+		implements DestinationTopicResolver, ApplicationListener<ContextRefreshedEvent>, ApplicationContextAware {
 
 	private static final String NO_OPS_SUFFIX = "-noOps";
 
@@ -56,20 +59,36 @@ public class DefaultDestinationTopicResolver extends ExceptionClassifier
 
 	private final Map<String, DestinationTopicHolder> sourceDestinationsHolderMap;
 
-	private final Map<String, DestinationTopic> destinationsTopicMap;
-
 	private final Clock clock;
 
-	private final ApplicationContext applicationContext;
+	private ApplicationContext applicationContext;
 
 	private boolean contextRefreshed;
 
+	@Deprecated
 	public DefaultDestinationTopicResolver(Clock clock, ApplicationContext applicationContext) {
+		this(clock);
 		this.applicationContext = applicationContext;
+	}
+
+	/**
+	 * Constructs an instance with the given clock.
+	 * @param clock the clock to be used for time-based operations
+	 * such as verifying timeouts.
+	 * @since 2.9
+	 */
+	public DefaultDestinationTopicResolver(Clock clock) {
 		this.clock = clock;
 		this.sourceDestinationsHolderMap = new HashMap<>();
-		this.destinationsTopicMap = new HashMap<>();
 		this.contextRefreshed = false;
+	}
+
+	/**
+	 * Constructs an instance with a default clock.
+	 * @since 2.9
+	 */
+	public DefaultDestinationTopicResolver() {
+		this(Clock.systemUTC());
 	}
 
 	@Override
@@ -82,7 +101,7 @@ public class DefaultDestinationTopicResolver extends ExceptionClassifier
 						&& isNotFatalException(e)
 						&& !isPastTimout(originalTimestamp, destinationTopicHolder)
 					? resolveRetryDestination(destinationTopicHolder)
-					: resolveDltOrNoOpsDestination(topic);
+					: getDltOrNoOpsDestination(topic);
 	}
 
 	private Boolean isNotFatalException(Exception e) {
@@ -119,18 +138,28 @@ public class DefaultDestinationTopicResolver extends ExceptionClassifier
 
 	@Override
 	public DestinationTopic getDestinationTopicByName(String topic) {
-		return Objects.requireNonNull(this.destinationsTopicMap.get(topic),
-				() -> "No topic found for " + topic);
+		return Objects.requireNonNull(this.sourceDestinationsHolderMap.get(topic),
+				() -> "No DestinationTopic found for " + topic).getSourceDestination();
 	}
 
-	private DestinationTopic resolveDltOrNoOpsDestination(String topic) {
-		DestinationTopic destination = getDestinationFor(topic);
+	@Nullable
+	@Override
+	public DestinationTopic getDltFor(String topicName) {
+		DestinationTopic destination = getDltOrNoOpsDestination(topicName);
+		return destination.isNoOpsTopic()
+				? null
+				: destination;
+	}
+
+	private DestinationTopic getDltOrNoOpsDestination(String topic) {
+		DestinationTopic destination = getNextDestinationTopicFor(topic);
 		return destination.isDltTopic() || destination.isNoOpsTopic()
 				? destination
-				: resolveDltOrNoOpsDestination(destination.getDestinationName());
+				: getDltOrNoOpsDestination(destination.getDestinationName());
 	}
 
-	private DestinationTopic getDestinationFor(String topic) {
+	@Override
+	public DestinationTopic getNextDestinationTopicFor(String topic) {
 		return getDestinationHolderFor(topic).getNextDestination();
 	}
 
@@ -158,9 +187,6 @@ public class DefaultDestinationTopicResolver extends ExceptionClassifier
 					+ DefaultDestinationTopicResolver.class.getSimpleName() + " is already refreshed.");
 		}
 		synchronized (this.sourceDestinationsHolderMap) {
-			this.destinationsTopicMap.putAll(destinationsToAdd
-					.stream()
-					.collect(Collectors.toMap(destination -> destination.getDestinationName(), destination -> destination)));
 			this.sourceDestinationsHolderMap.putAll(correlatePairSourceAndDestinationValues(destinationsToAdd));
 		}
 	}
@@ -195,6 +221,11 @@ public class DefaultDestinationTopicResolver extends ExceptionClassifier
 	 */
 	public boolean isContextRefreshed() {
 		return this.contextRefreshed;
+	}
+
+	@Override
+	public void setApplicationContext(ApplicationContext applicationContext) throws BeansException {
+		this.applicationContext = applicationContext;
 	}
 
 	public static class DestinationTopicHolder {

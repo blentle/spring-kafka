@@ -1,5 +1,5 @@
 /*
- * Copyright 2017-2022 the original author or authors.
+ * Copyright 2022 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -61,18 +61,17 @@ import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.kafka.listener.ContainerProperties.AckMode;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.kafka.test.utils.KafkaTestUtils;
-import org.springframework.lang.Nullable;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
 
 /**
  * @author Gary Russell
- * @since 2.3
+ * @since 2.8.5
  *
  */
 @SpringJUnitConfig
 @DirtiesContext
-public class ManualNackRecordTests {
+public class ManualNackRecordZeroSleepTests {
 
 	@SuppressWarnings("rawtypes")
 	@Autowired
@@ -83,16 +82,10 @@ public class ManualNackRecordTests {
 	@Autowired
 	private KafkaListenerEndpointRegistry registry;
 
-	/*
-	 * Deliver 6 records from three partitions, fail on the second record second
-	 * partition, first attempt; verify partition 0,1 committed and a total of 7 records
-	 * handled after seek.
-	 */
 	@SuppressWarnings({ "unchecked" })
 	@Test
-	public void discardRemainingRecordsFromPollAndSeek() throws Exception {
+	public void zeroSleepNackFirstLastAndMiddleRecords() throws Exception {
 		assertThat(this.config.deliveryLatch.await(10, TimeUnit.SECONDS)).isTrue();
-		assertThat(this.config.replayTime).isBetween(50L, 30_000L);
 		assertThat(this.config.commitLatch.await(10, TimeUnit.SECONDS)).isTrue();
 		assertThat(this.config.pollLatch.await(10, TimeUnit.SECONDS)).isTrue();
 		this.registry.stop();
@@ -105,15 +98,19 @@ public class ManualNackRecordTests {
 		commit1.put(new TopicPartition("foo", 1), new OffsetAndMetadata(1L));
 		HashMap<TopicPartition, OffsetAndMetadata> commit2 = new HashMap<>();
 		commit2.put(new TopicPartition("foo", 1), new OffsetAndMetadata(2L));
-		commit2.put(new TopicPartition("foo", 2), new OffsetAndMetadata(2L));
+		commit2.put(new TopicPartition("foo", 2), new OffsetAndMetadata(1L));
+		HashMap<TopicPartition, OffsetAndMetadata> commit3 = new HashMap<>();
+		commit3.put(new TopicPartition("foo", 2), new OffsetAndMetadata(2L));
+		inOrder.verify(this.consumer).seek(new TopicPartition("foo", 1), 0L);
 		inOrder.verify(this.consumer).commitSync(commit1, Duration.ofSeconds(60));
 		inOrder.verify(this.consumer).seek(new TopicPartition("foo", 1), 1L);
 		inOrder.verify(this.consumer).seek(new TopicPartition("foo", 2), 0L);
-		inOrder.verify(this.consumer).poll(Duration.ofMillis(ContainerProperties.DEFAULT_POLL_TIMEOUT));
 		inOrder.verify(this.consumer).commitSync(commit2, Duration.ofSeconds(60));
-		assertThat(this.config.count).isEqualTo(7);
+		inOrder.verify(this.consumer).seek(new TopicPartition("foo", 2), 1L);
+		inOrder.verify(this.consumer).commitSync(commit3, Duration.ofSeconds(60));
+		assertThat(this.config.count).isEqualTo(9);
 		assertThat(this.config.contents.toArray()).isEqualTo(new String[]
-				{ "foo", "bar", "baz", "qux", "qux", "fiz", "buz" });
+				{ "foo", "foo", "bar", "baz", "qux", "qux", "fiz", "buz", "buz"});
 	}
 
 	@Configuration
@@ -122,27 +119,24 @@ public class ManualNackRecordTests {
 
 		final List<String> contents = new ArrayList<>();
 
-		final CountDownLatch pollLatch = new CountDownLatch(3);
+		final CountDownLatch pollLatch = new CountDownLatch(5);
 
-		final CountDownLatch deliveryLatch = new CountDownLatch(7);
+		final CountDownLatch deliveryLatch = new CountDownLatch(9);
 
 		final CountDownLatch closeLatch = new CountDownLatch(1);
 
-		final CountDownLatch commitLatch = new CountDownLatch(2);
+		final CountDownLatch commitLatch = new CountDownLatch(4);
 
 		volatile int count;
-
-		volatile long replayTime;
 
 		@KafkaListener(topics = "foo", groupId = "grp")
 		public void foo(String in, Acknowledgment ack) {
 			this.contents.add(in);
-			if (in.equals("qux")) {
-				this.replayTime = System.currentTimeMillis() - this.replayTime;
-			}
 			this.deliveryLatch.countDown();
-			if (++this.count == 4) { // part 1, offset 1, first time
-				ack.nack(50);
+			++this.count;
+			if (this.contents.size() == 1 || this.count == 5 || this.count == 8) {
+				// first, last record or part 1, offset 1, first time
+				ack.nack(0);
 			}
 			else {
 				ack.acknowledge();
@@ -192,6 +186,10 @@ public class ManualNackRecordTests {
 			records2.put(topicPartition1, Arrays.asList(
 					new ConsumerRecord("foo", 1, 1L, 0L, TimestampType.NO_TIMESTAMP_TYPE, 0, 0, null, "qux",
 							new RecordHeaders(), Optional.empty())));
+			Map<TopicPartition, List<ConsumerRecord>> records3 = new LinkedHashMap<>();
+			records3.put(topicPartition2, Arrays.asList(
+					new ConsumerRecord("foo", 2, 1L, 0L, TimestampType.NO_TIMESTAMP_TYPE, 0, 0, null, "buz",
+							new RecordHeaders(), Optional.empty())));
 			final AtomicInteger which = new AtomicInteger();
 			final AtomicBoolean paused = new AtomicBoolean();
 			willAnswer(i -> {
@@ -202,9 +200,12 @@ public class ManualNackRecordTests {
 				this.pollLatch.countDown();
 				switch (which.getAndIncrement()) {
 					case 0:
-						return new ConsumerRecords(records1);
 					case 1:
+						return new ConsumerRecords(records1);
+					case 2:
 						return new ConsumerRecords(records2);
+					case 3:
+						return new ConsumerRecords(records3);
 					default:
 						try {
 							Thread.sleep(1000);
@@ -244,18 +245,6 @@ public class ManualNackRecordTests {
 			factory.setConsumerFactory(consumerFactory());
 			factory.getContainerProperties().setAckMode(AckMode.MANUAL);
 			factory.getContainerProperties().setMissingTopicsFatal(false);
-			factory.setRecordInterceptor(new RecordInterceptor() {
-
-				@Override
-				@Nullable
-				@SuppressWarnings("rawtypes")
-				public ConsumerRecord intercept(ConsumerRecord record, Consumer consumer) {
-					return new ConsumerRecord(record.topic(), record.partition(), record.offset(), 0L,
-							TimestampType.NO_TIMESTAMP_TYPE, 0, 0, record.key(), record.value(), record.headers(),
-							Optional.empty());
-				}
-
-			});
 			return factory;
 		}
 

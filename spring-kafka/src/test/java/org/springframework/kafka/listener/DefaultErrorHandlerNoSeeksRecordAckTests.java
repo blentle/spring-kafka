@@ -1,5 +1,5 @@
 /*
- * Copyright 2017-2022 the original author or authors.
+ * Copyright 2022 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,29 +18,30 @@ package org.springframework.kafka.listener;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willAnswer;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.kafka.clients.consumer.Consumer;
-import org.apache.kafka.clients.consumer.ConsumerRebalanceListener;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
@@ -59,24 +60,26 @@ import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
 import org.springframework.kafka.config.KafkaListenerEndpointRegistry;
 import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.kafka.listener.ContainerProperties.AckMode;
-import org.springframework.kafka.support.Acknowledgment;
+import org.springframework.kafka.support.KafkaHeaders;
 import org.springframework.kafka.test.utils.KafkaTestUtils;
-import org.springframework.lang.Nullable;
+import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
+import org.springframework.util.backoff.FixedBackOff;
 
 /**
  * @author Gary Russell
- * @since 2.3
+ * @since 2.9
  *
  */
 @SpringJUnitConfig
 @DirtiesContext
-public class ManualNackRecordTests {
+public class DefaultErrorHandlerNoSeeksRecordAckTests {
 
 	@SuppressWarnings("rawtypes")
 	@Autowired
 	private Consumer consumer;
+
 	@Autowired
 	private Config config;
 
@@ -88,32 +91,78 @@ public class ManualNackRecordTests {
 	 * partition, first attempt; verify partition 0,1 committed and a total of 7 records
 	 * handled after seek.
 	 */
-	@SuppressWarnings({ "unchecked" })
+	@SuppressWarnings("unchecked")
 	@Test
-	public void discardRemainingRecordsFromPollAndSeek() throws Exception {
+	public void retriesWithNoSeeksAckModeRecord() throws Exception {
 		assertThat(this.config.deliveryLatch.await(10, TimeUnit.SECONDS)).isTrue();
-		assertThat(this.config.replayTime).isBetween(50L, 30_000L);
 		assertThat(this.config.commitLatch.await(10, TimeUnit.SECONDS)).isTrue();
 		assertThat(this.config.pollLatch.await(10, TimeUnit.SECONDS)).isTrue();
 		this.registry.stop();
 		assertThat(this.config.closeLatch.await(10, TimeUnit.SECONDS)).isTrue();
 		InOrder inOrder = inOrder(this.consumer);
-		inOrder.verify(this.consumer).subscribe(any(Collection.class), any(ConsumerRebalanceListener.class));
+		inOrder.verify(this.consumer).assign(any(Collection.class));
 		inOrder.verify(this.consumer).poll(Duration.ofMillis(ContainerProperties.DEFAULT_POLL_TIMEOUT));
-		HashMap<TopicPartition, OffsetAndMetadata> commit1 = new HashMap<>();
-		commit1.put(new TopicPartition("foo", 0), new OffsetAndMetadata(2L));
-		commit1.put(new TopicPartition("foo", 1), new OffsetAndMetadata(1L));
-		HashMap<TopicPartition, OffsetAndMetadata> commit2 = new HashMap<>();
-		commit2.put(new TopicPartition("foo", 1), new OffsetAndMetadata(2L));
-		commit2.put(new TopicPartition("foo", 2), new OffsetAndMetadata(2L));
-		inOrder.verify(this.consumer).commitSync(commit1, Duration.ofSeconds(60));
-		inOrder.verify(this.consumer).seek(new TopicPartition("foo", 1), 1L);
-		inOrder.verify(this.consumer).seek(new TopicPartition("foo", 2), 0L);
+		inOrder.verify(this.consumer).commitSync(
+				Collections.singletonMap(new TopicPartition("foo", 0), new OffsetAndMetadata(1L)),
+				Duration.ofSeconds(60));
+		inOrder.verify(this.consumer).commitSync(
+				Collections.singletonMap(new TopicPartition("foo", 0), new OffsetAndMetadata(2L)),
+				Duration.ofSeconds(60));
+		inOrder.verify(this.consumer).commitSync(
+				Collections.singletonMap(new TopicPartition("foo", 1), new OffsetAndMetadata(1L)),
+				Duration.ofSeconds(60));
+		inOrder.verify(this.consumer).pause(any());
 		inOrder.verify(this.consumer).poll(Duration.ofMillis(ContainerProperties.DEFAULT_POLL_TIMEOUT));
-		inOrder.verify(this.consumer).commitSync(commit2, Duration.ofSeconds(60));
-		assertThat(this.config.count).isEqualTo(7);
-		assertThat(this.config.contents.toArray()).isEqualTo(new String[]
-				{ "foo", "bar", "baz", "qux", "qux", "fiz", "buz" });
+		inOrder.verify(this.consumer).commitSync(
+				Collections.singletonMap(new TopicPartition("foo", 1), new OffsetAndMetadata(2L)),
+				Duration.ofSeconds(60));
+		inOrder.verify(this.consumer).commitSync(
+				Collections.singletonMap(new TopicPartition("foo", 2), new OffsetAndMetadata(1L)),
+				Duration.ofSeconds(60));
+		inOrder.verify(this.consumer).commitSync(
+				Collections.singletonMap(new TopicPartition("foo", 2), new OffsetAndMetadata(2L)),
+				Duration.ofSeconds(60));
+		inOrder.verify(this.consumer).resume(any());
+		inOrder.verify(this.consumer).poll(Duration.ofMillis(ContainerProperties.DEFAULT_POLL_TIMEOUT));
+		assertThat(this.config.count).isEqualTo(8);
+		assertThat(this.config.contents).contains("foo", "bar", "baz", "qux", "qux", "qux", "fiz", "buz");
+		assertThat(this.config.deliveries).contains(1, 1, 1, 1, 2, 3, 1, 1);
+		assertThat(this.config.deliveryAttempt).isNotNull();
+		verify(this.consumer, never()).seek(any(), anyLong());
+	}
+
+	@SuppressWarnings({ "rawtypes", "unchecked" })
+	@Test
+	void emergencyStopIfPollReturnsRecordsUnexpectedly() throws InterruptedException {
+		final Consumer consumer = mock(Consumer.class);
+		ConsumerFactory consumerFactory = mock(ConsumerFactory.class);
+		given(consumerFactory.createConsumer("grp", "", null, KafkaTestUtils.defaultPropertyOverrides()))
+			.willReturn(consumer);
+		ConsumerRecords records = new ConsumerRecords(Map.of(new TopicPartition("foo", 0),
+				List.of(new ConsumerRecord("foo", 0, 0L, 0L, TimestampType.NO_TIMESTAMP_TYPE, 0, 0, null, "foo",
+							new RecordHeaders(), Optional.empty()))));
+		willAnswer(inv -> {
+			Thread.sleep(20);
+			return records;
+		}).given(consumer).poll(any());
+		CountDownLatch latch = new CountDownLatch(1);
+		willAnswer(inv -> {
+			latch.countDown();
+			return null;
+		}).given(consumer).close();
+		ContainerProperties props = new ContainerProperties("foo");
+		props.setGroupId("grp");
+		props.setMessageListener((MessageListener) rec -> {
+			throw new RuntimeException("emergencyStopIfPollReturnsRecordsUnexpectedly");
+		});
+		KafkaMessageListenerContainer container = new KafkaMessageListenerContainer(consumerFactory, props);
+		DefaultErrorHandler deh = new DefaultErrorHandler(new FixedBackOff(10, 5));
+		deh.setSeekAfterError(false);
+		container.setCommonErrorHandler(deh);
+		container.start();
+		assertThat(latch.await(10, TimeUnit.SECONDS)).isTrue();
+		assertThat(container.isRunning()).isFalse();
+		assertThat(container.isInExpectedState()).isFalse();
 	}
 
 	@Configuration
@@ -122,30 +171,29 @@ public class ManualNackRecordTests {
 
 		final List<String> contents = new ArrayList<>();
 
-		final CountDownLatch pollLatch = new CountDownLatch(3);
+		final List<Integer> deliveries = new ArrayList<>();
 
-		final CountDownLatch deliveryLatch = new CountDownLatch(7);
+		final CountDownLatch pollLatch = new CountDownLatch(4);
+
+		final CountDownLatch deliveryLatch = new CountDownLatch(8);
 
 		final CountDownLatch closeLatch = new CountDownLatch(1);
 
-		final CountDownLatch commitLatch = new CountDownLatch(2);
+		final CountDownLatch commitLatch = new CountDownLatch(6);
 
-		volatile int count;
+		int count;
 
-		volatile long replayTime;
+		volatile org.apache.kafka.common.header.Header deliveryAttempt;
 
-		@KafkaListener(topics = "foo", groupId = "grp")
-		public void foo(String in, Acknowledgment ack) {
+		@KafkaListener(groupId = "grp",
+				topicPartitions = @org.springframework.kafka.annotation.TopicPartition(topic = "foo",
+						partitions = "#{'0,1,2'.split(',')}"))
+		public void foo(String in, @Header(KafkaHeaders.DELIVERY_ATTEMPT) int delivery) {
 			this.contents.add(in);
-			if (in.equals("qux")) {
-				this.replayTime = System.currentTimeMillis() - this.replayTime;
-			}
+			this.deliveries.add(delivery);
 			this.deliveryLatch.countDown();
-			if (++this.count == 4) { // part 1, offset 1, first time
-				ack.nack(50);
-			}
-			else {
-				ack.acknowledge();
+			if (++this.count == 4 || this.count == 5) { // part 1, offset 1, first and second times
+				throw new RuntimeException("foo");
 			}
 		}
 
@@ -166,11 +214,6 @@ public class ManualNackRecordTests {
 			final TopicPartition topicPartition0 = new TopicPartition("foo", 0);
 			final TopicPartition topicPartition1 = new TopicPartition("foo", 1);
 			final TopicPartition topicPartition2 = new TopicPartition("foo", 2);
-			willAnswer(i -> {
-				((ConsumerRebalanceListener) i.getArgument(1)).onPartitionsAssigned(
-						Collections.singletonList(topicPartition1));
-				return null;
-			}).given(consumer).subscribe(any(Collection.class), any(ConsumerRebalanceListener.class));
 			Map<TopicPartition, List<ConsumerRecord>> records1 = new LinkedHashMap<>();
 			records1.put(topicPartition0, Arrays.asList(
 					new ConsumerRecord("foo", 0, 0L, 0L, TimestampType.NO_TIMESTAMP_TYPE, 0, 0, null, "foo",
@@ -187,27 +230,15 @@ public class ManualNackRecordTests {
 							new RecordHeaders(), Optional.empty()),
 					new ConsumerRecord("foo", 2, 1L, 0L, TimestampType.NO_TIMESTAMP_TYPE, 0, 0, null, "buz",
 							new RecordHeaders(), Optional.empty())));
-			Map<TopicPartition, List<ConsumerRecord>> records2 = new LinkedHashMap<>(records1);
-			records2.remove(topicPartition0);
-			records2.put(topicPartition1, Arrays.asList(
-					new ConsumerRecord("foo", 1, 1L, 0L, TimestampType.NO_TIMESTAMP_TYPE, 0, 0, null, "qux",
-							new RecordHeaders(), Optional.empty())));
 			final AtomicInteger which = new AtomicInteger();
-			final AtomicBoolean paused = new AtomicBoolean();
 			willAnswer(i -> {
-				if (paused.get()) {
-					Thread.sleep(10);
-					return ConsumerRecords.empty();
-				}
 				this.pollLatch.countDown();
 				switch (which.getAndIncrement()) {
 					case 0:
 						return new ConsumerRecords(records1);
-					case 1:
-						return new ConsumerRecords(records2);
 					default:
 						try {
-							Thread.sleep(1000);
+							Thread.sleep(50);
 						}
 						catch (InterruptedException e) {
 							Thread.currentThread().interrupt();
@@ -215,17 +246,7 @@ public class ManualNackRecordTests {
 						return new ConsumerRecords(Collections.emptyMap());
 				}
 			}).given(consumer).poll(Duration.ofMillis(ContainerProperties.DEFAULT_POLL_TIMEOUT));
-			willAnswer(i -> {
-				return Collections.emptySet();
-			}).given(consumer).paused();
-			willAnswer(i -> {
-				paused.set(true);
-				return null;
-			}).given(consumer).pause(any());
-			willAnswer(i -> {
-				paused.set(false);
-				return null;
-			}).given(consumer).resume(any());
+			List<TopicPartition> paused = new ArrayList<>();
 			willAnswer(i -> {
 				this.commitLatch.countDown();
 				return null;
@@ -234,28 +255,34 @@ public class ManualNackRecordTests {
 				this.closeLatch.countDown();
 				return null;
 			}).given(consumer).close();
+			willAnswer(i -> {
+				paused.addAll(i.getArgument(0));
+				return null;
+			}).given(consumer).pause(any());
+			willAnswer(i -> {
+				return new HashSet<>(paused);
+			}).given(consumer).paused();
+			willAnswer(i -> {
+				paused.removeAll(i.getArgument(0));
+				return null;
+			}).given(consumer).resume(any());
 			return consumer;
 		}
 
 		@SuppressWarnings({ "rawtypes", "unchecked" })
 		@Bean
-		public ConcurrentKafkaListenerContainerFactory kafkaListenerContainerFactory() {
+		ConcurrentKafkaListenerContainerFactory kafkaListenerContainerFactory() {
 			ConcurrentKafkaListenerContainerFactory factory = new ConcurrentKafkaListenerContainerFactory();
 			factory.setConsumerFactory(consumerFactory());
-			factory.getContainerProperties().setAckMode(AckMode.MANUAL);
-			factory.getContainerProperties().setMissingTopicsFatal(false);
-			factory.setRecordInterceptor(new RecordInterceptor() {
-
-				@Override
-				@Nullable
-				@SuppressWarnings("rawtypes")
-				public ConsumerRecord intercept(ConsumerRecord record, Consumer consumer) {
-					return new ConsumerRecord(record.topic(), record.partition(), record.offset(), 0L,
-							TimestampType.NO_TIMESTAMP_TYPE, 0, 0, record.key(), record.value(), record.headers(),
-							Optional.empty());
-				}
-
+			factory.getContainerProperties().setAckMode(AckMode.RECORD);
+			factory.getContainerProperties().setDeliveryAttemptHeader(true);
+			factory.setRecordInterceptor((record, consumer) -> {
+				Config.this.deliveryAttempt = record.headers().lastHeader(KafkaHeaders.DELIVERY_ATTEMPT);
+				return record;
 			});
+			DefaultErrorHandler eh = new DefaultErrorHandler();
+			eh.setSeekAfterError(false);
+			factory.setCommonErrorHandler(eh);
 			return factory;
 		}
 

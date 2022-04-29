@@ -38,7 +38,7 @@ import org.springframework.util.backoff.BackOff;
  * not provided in the exception, error handling is delegated to a
  * {@link FallbackBatchErrorHandler} with this handler's {@link BackOff}. If the record is
  * recovered, its offset is committed. This is a replacement for the legacy
- * {@link SeekToCurrentErrorHandler} and {@link SeekToCurrentBatchErrorHandler} (but the
+ * {@code SeekToCurrentErrorHandler} and {@code SeekToCurrentBatchErrorHandler} (but the
  * fallback now can send the messages to a recoverer after retries are completed instead
  * of retrying indefinitely).
  *
@@ -117,8 +117,14 @@ public class DefaultErrorHandler extends FailedBatchProcessor implements CommonE
 	}
 
 	@Override
+	@Deprecated
 	public boolean remainingRecords() {
-		return true;
+		return isSeekAfterError();
+	}
+
+	@Override
+	public boolean seeksAfterHandling() {
+		return isSeekAfterError();
 	}
 
 	@Override
@@ -127,11 +133,23 @@ public class DefaultErrorHandler extends FailedBatchProcessor implements CommonE
 	}
 
 	@Override
+	public boolean handleOne(Exception thrownException, ConsumerRecord<?, ?> record, Consumer<?, ?> consumer,
+			MessageListenerContainer container) {
+
+		try {
+			return getFailureTracker().recovered(record, thrownException, container, consumer);
+		}
+		catch (Exception ex) {
+			return false;
+		}
+	}
+
+	@Override
 	public void handleRemaining(Exception thrownException, List<ConsumerRecord<?, ?>> records,
 			Consumer<?, ?> consumer, MessageListenerContainer container) {
 
 		SeekUtils.seekOrRecover(thrownException, records, consumer, container, isCommitRecovered(), // NOSONAR
-				getRecoveryStrategy(records, consumer, thrownException), this.logger, getLogLevel());
+				getFailureTracker()::recovered, this.logger, getLogLevel());
 	}
 
 	@Override
@@ -139,6 +157,14 @@ public class DefaultErrorHandler extends FailedBatchProcessor implements CommonE
 			MessageListenerContainer container, Runnable invokeListener) {
 
 		doHandle(thrownException, data, consumer, container, invokeListener);
+	}
+
+	@Override
+	public <K, V> ConsumerRecords<K, V> handleBatchAndReturnRemaining(Exception thrownException,
+			ConsumerRecords<?, ?> data, Consumer<?, ?> consumer, MessageListenerContainer container,
+			Runnable invokeListener) {
+
+		return handle(thrownException, data, consumer, container, invokeListener);
 	}
 
 	@Override

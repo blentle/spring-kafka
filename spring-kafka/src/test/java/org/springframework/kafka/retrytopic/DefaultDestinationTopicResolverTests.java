@@ -52,7 +52,7 @@ class DefaultDestinationTopicResolverTests extends DestinationTopicTests {
 
 	private final Clock clock = TestClockUtils.CLOCK;
 
-	private DestinationTopicResolver defaultDestinationTopicContainer;
+	private DefaultDestinationTopicResolver defaultDestinationTopicContainer;
 
 	private final long originalTimestamp = Instant.now(this.clock).toEpochMilli();
 
@@ -61,7 +61,8 @@ class DefaultDestinationTopicResolverTests extends DestinationTopicTests {
 	@BeforeEach
 	public void setup() {
 
-		defaultDestinationTopicContainer = new DefaultDestinationTopicResolver(clock, applicationContext);
+		defaultDestinationTopicContainer = new DefaultDestinationTopicResolver(clock);
+		defaultDestinationTopicContainer.setApplicationContext(applicationContext);
 		defaultDestinationTopicContainer.addDestinationTopics(allFirstDestinationsTopics);
 		defaultDestinationTopicContainer.addDestinationTopics(allSecondDestinationTopics);
 		defaultDestinationTopicContainer.addDestinationTopics(allThirdDestinationTopics);
@@ -132,7 +133,7 @@ class DefaultDestinationTopicResolverTests extends DestinationTopicTests {
 	void shouldResolveRetryDestinationForWrappedTimestampedException() {
 		assertThat(defaultDestinationTopicContainer
 				.resolveDestinationTopic(mainDestinationTopic.getDestinationName(),
-						1, new TimestampedException(new RuntimeException()), originalTimestamp))
+						1, new TimestampedException(new RuntimeException(), Instant.now(this.clock)), originalTimestamp))
 				.isEqualTo(firstRetryDestinationTopic);
 	}
 
@@ -159,6 +160,26 @@ class DefaultDestinationTopicResolverTests extends DestinationTopicTests {
 	}
 
 	@Test
+	void shouldGetDestinationTopic() {
+		assertThat(defaultDestinationTopicContainer
+				.getDestinationTopicByName(mainDestinationTopic.getDestinationName())).isEqualTo(mainDestinationTopic);
+	}
+
+	@Test
+	void shouldGetNextDestinationTopic() {
+		assertThat(defaultDestinationTopicContainer
+				.getNextDestinationTopicFor(mainDestinationTopic.getDestinationName()))
+				.isEqualTo(firstRetryDestinationTopic);
+	}
+
+	@Test
+	void shouldGetDlt() {
+		assertThat(defaultDestinationTopicContainer
+				.getDltFor(mainDestinationTopic.getDestinationName()))
+				.isEqualTo(dltDestinationTopic);
+	}
+
+	@Test
 	void shouldThrowIfNoDestinationFound() {
 		assertThatNullPointerException().isThrownBy(() -> defaultDestinationTopicContainer.resolveDestinationTopic("Non-existing-topic", 0,
 						new IllegalArgumentException(), originalTimestamp));
@@ -177,7 +198,7 @@ class DefaultDestinationTopicResolverTests extends DestinationTopicTests {
 
 	@Test
 	void shouldThrowIfAddsDestinationsAfterClosed() {
-		((DefaultDestinationTopicResolver) defaultDestinationTopicContainer)
+		defaultDestinationTopicContainer
 				.onApplicationEvent(new ContextRefreshedEvent(applicationContext));
 		assertThatIllegalStateException().isThrownBy(() ->
 				defaultDestinationTopicContainer.addDestinationTopics(Collections.emptyList()));
@@ -185,16 +206,16 @@ class DefaultDestinationTopicResolverTests extends DestinationTopicTests {
 
 	@Test
 	void shouldCloseContainerOnContextRefresh() {
-		((DefaultDestinationTopicResolver) defaultDestinationTopicContainer)
+		defaultDestinationTopicContainer
 				.onApplicationEvent(new ContextRefreshedEvent(applicationContext));
-		assertThat(((DefaultDestinationTopicResolver) defaultDestinationTopicContainer).isContextRefreshed()).isTrue();
+		assertThat(defaultDestinationTopicContainer.isContextRefreshed()).isTrue();
 	}
 
 	@Test
 	void shouldNotMarkContainerRefeshedOnOtherContextRefresh() {
-		((DefaultDestinationTopicResolver) defaultDestinationTopicContainer)
+		defaultDestinationTopicContainer
 				.onApplicationEvent(new ContextRefreshedEvent(otherApplicationContext));
-		assertThat(((DefaultDestinationTopicResolver) defaultDestinationTopicContainer).isContextRefreshed()).isFalse();
+		assertThat(defaultDestinationTopicContainer.isContextRefreshed()).isFalse();
 	}
 
 }
