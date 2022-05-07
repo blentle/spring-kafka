@@ -275,8 +275,8 @@ Then, to use the template, you can invoke one of its methods.
 When you use the methods with a `Message<?>` parameter, the topic, partition, and key information is provided in a message header that includes the following items:
 
 * `KafkaHeaders.TOPIC`
-* `KafkaHeaders.PARTITION_ID`
-* `KafkaHeaders.MESSAGE_KEY`
+* `KafkaHeaders.PARTITION`
+* `KafkaHeaders.KEY`
 * `KafkaHeaders.TIMESTAMP`
 
 The message payload is the data.
@@ -831,7 +831,7 @@ In this example, we use the reply topic header from the request:
 public Message<?> messageReturn(String in) {
     return MessageBuilder.withPayload(in.toUpperCase())
             .setHeader(KafkaHeaders.TOPIC, replyTo)
-            .setHeader(KafkaHeaders.MESSAGE_KEY, 42)
+            .setHeader(KafkaHeaders.KEY, 42)
             .setHeader(KafkaHeaders.CORRELATION_ID, correlation)
             .build();
 }
@@ -850,7 +850,7 @@ It will also echo the incoming `KafkaHeaders.CORRELATION_ID` and `KafkaHeaders.R
 @SendTo  // default REPLY_TOPIC header
 public Message<?> messageReturn(String in) {
     return MessageBuilder.withPayload(in.toUpperCase())
-            .setHeader(KafkaHeaders.MESSAGE_KEY, 42)
+            .setHeader(KafkaHeaders.KEY, 42)
             .build();
 }
 ----
@@ -1252,8 +1252,8 @@ NOTE: If you want to commit a partial batch, using `nack()`, When using transact
 
 IMPORTANT: `nack()` can only be called on the consumer thread that invokes your listener.
 
-With a record listener, when `nack()` is called, any pending offsets are committed, the remaing records from the last poll are discarded, and seeks are performed on their partitions so that the failed record and unprocessed records are redelivered on the next `poll()`.
-The consumer thread can be paused before redelivery, by setting the `sleep` argument.
+With a record listener, when `nack()` is called, any pending offsets are committed, the remaining records from the last poll are discarded, and seeks are performed on their partitions so that the failed record and unprocessed records are redelivered on the next `poll()`.
+The consumer can be paused before redelivery, by setting the `sleep` argument.
 This is similar functionality to throwing an exception when the container is configured with a `DefaultErrorHandler`.
 
 When using a batch listener, you can specify the index within the batch where the failure occurred.
@@ -1261,7 +1261,10 @@ When `nack()` is called, offsets will be committed for records before the index 
 
 See <<error-handlers>> for more information.
 
-IMPORTANT: When using partition assignment via group management, it is important to ensure the `sleep` argument (plus the time spent processing records from the previous poll) is less than the consumer `max.poll.interval.ms` property.
+IMPORTANT: The consumer is paused during the sleep so that we continue to poll the broker to keep the consumer alive.
+The actual sleep time, and its resolution, depends on the container's `pollTimeout` which defaults to 5 seconds.
+The minimum sleep time is equal to the `pollTimeout` and all sleep times will be a multiple of it.
+For small sleep times or, to increase its accuracy, consider reducing the container's `pollTimeout`.
 
 [[container-auto-startup]]
 ====== Listener Container Auto Startup
@@ -1471,13 +1474,13 @@ Finally, metadata about the record is available from message headers.
 You can use the following header names to retrieve the headers of the message:
 
 * `KafkaHeaders.OFFSET`
-* `KafkaHeaders.RECEIVED_MESSAGE_KEY`
+* `KafkaHeaders.RECEIVED_KEY`
 * `KafkaHeaders.RECEIVED_TOPIC`
-* `KafkaHeaders.RECEIVED_PARTITION_ID`
+* `KafkaHeaders.RECEIVED_PARTITION`
 * `KafkaHeaders.RECEIVED_TIMESTAMP`
 * `KafkaHeaders.TIMESTAMP_TYPE`
 
-Starting with version 2.5 the `RECEIVED_MESSAGE_KEY` is not present if the incoming record has a `null` key; previously the header was populated with a `null` value.
+Starting with version 2.5 the `RECEIVED_KEY` is not present if the incoming record has a `null` key; previously the header was populated with a `null` value.
 This change is to make the framework consistent with `spring-messaging` conventions where `null` valued headers are not present.
 
 The following example shows how to use the headers:
@@ -1487,8 +1490,8 @@ The following example shows how to use the headers:
 ----
 @KafkaListener(id = "qux", topicPattern = "myTopic1")
 public void listen(@Payload String foo,
-        @Header(name = KafkaHeaders.RECEIVED_MESSAGE_KEY, required = false) Integer key,
-        @Header(KafkaHeaders.RECEIVED_PARTITION_ID) int partition,
+        @Header(name = KafkaHeaders.RECEIVED_KEY, required = false) Integer key,
+        @Header(KafkaHeaders.RECEIVED_PARTITION) int partition,
         @Header(KafkaHeaders.RECEIVED_TOPIC) String topic,
         @Header(KafkaHeaders.RECEIVED_TIMESTAMP) long ts
         ) {
@@ -1555,8 +1558,8 @@ The following example shows how to use the headers:
 ----
 @KafkaListener(id = "list", topics = "myTopic", containerFactory = "batchFactory")
 public void listen(List<String> list,
-        @Header(KafkaHeaders.RECEIVED_MESSAGE_KEY) List<Integer> keys,
-        @Header(KafkaHeaders.RECEIVED_PARTITION_ID) List<Integer> partitions,
+        @Header(KafkaHeaders.RECEIVED_KEY) List<Integer> keys,
+        @Header(KafkaHeaders.RECEIVED_PARTITION) List<Integer> partitions,
         @Header(KafkaHeaders.RECEIVED_TOPIC) List<String> topics,
         @Header(KafkaHeaders.OFFSET) List<Long> offsets) {
     ...
@@ -2157,7 +2160,7 @@ public class MultiListenerSendTo {
     @KafkaHandler
     @SendTo("!{'annotated25reply2'}")
     public String bar(@Payload(required = false) KafkaNull nul,
-            @Header(KafkaHeaders.RECEIVED_MESSAGE_KEY) int key) {
+            @Header(KafkaHeaders.RECEIVED_KEY) int key) {
         ...
     }
 
@@ -2255,7 +2258,7 @@ public Message<?> listen(String in, @Header(KafkaHeaders.REPLY_TOPIC) byte[] rep
         @Header(KafkaHeaders.CORRELATION_ID) byte[] correlation) {
     return MessageBuilder.withPayload(in.toUpperCase())
             .setHeader(KafkaHeaders.TOPIC, replyTo)
-            .setHeader(KafkaHeaders.MESSAGE_KEY, 42)
+            .setHeader(KafkaHeaders.KEY, 42)
             .setHeader(KafkaHeaders.CORRELATION_ID, correlation)
             .setHeader("someOtherHeader", "someValue")
             .build();
@@ -4883,7 +4886,7 @@ The following example shows such a configuration:
 [source, java]
 ----
 @KafkaListener(id = "deletableListener", topics = "myTopic")
-public void listen(@Payload(required = false) String value, @Header(KafkaHeaders.RECEIVED_MESSAGE_KEY) String key) {
+public void listen(@Payload(required = false) String value, @Header(KafkaHeaders.RECEIVED_KEY) String key) {
     // value == null represents key deletion
 }
 ----
@@ -4910,7 +4913,7 @@ static class MultiListenerBean {
     }
 
     @KafkaHandler
-    public void delete(@Payload(required = false) KafkaNull nul, @Header(KafkaHeaders.RECEIVED_MESSAGE_KEY) int key) {
+    public void delete(@Payload(required = false) KafkaNull nul, @Header(KafkaHeaders.RECEIVED_KEY) int key) {
         ...
     }
 
@@ -4996,7 +4999,7 @@ public ConsumerAwareListenerErrorHandler listen3ErrorHandler() {
         MessageHeaders headers = m.getHeaders();
         c.seek(new org.apache.kafka.common.TopicPartition(
                 headers.get(KafkaHeaders.RECEIVED_TOPIC, String.class),
-                headers.get(KafkaHeaders.RECEIVED_PARTITION_ID, Integer.class)),
+                headers.get(KafkaHeaders.RECEIVED_PARTITION, Integer.class)),
                 headers.get(KafkaHeaders.OFFSET, Long.class));
         return null;
     };
@@ -5015,7 +5018,7 @@ public ConsumerAwareListenerErrorHandler listen10ErrorHandler() {
         this.listen10Exception = e;
         MessageHeaders headers = m.getHeaders();
         List<String> topics = headers.get(KafkaHeaders.RECEIVED_TOPIC, List.class);
-        List<Integer> partitions = headers.get(KafkaHeaders.RECEIVED_PARTITION_ID, List.class);
+        List<Integer> partitions = headers.get(KafkaHeaders.RECEIVED_PARTITION, List.class);
         List<Long> offsets = headers.get(KafkaHeaders.OFFSET, List.class);
         Map<TopicPartition, Long> offsetsToReset = new HashMap<>();
         for (int i = 0; i < topics.size(); i++) {
@@ -5563,6 +5566,30 @@ public void listen2(@Payload Thing thing,
 When used in a `RecordInterceptor` or `RecordFilterStrategy` implementation, the header is in the consumer record as a byte array, converted using the `KafkaListenerAnnotationBeanPostProcessor` 's `charSet` property.
 
 The header mappers also convert to `String` when creating `MessageHeaders` from the consumer record and never map this header on an outbound record.
+
+For POJO batch listeners, starting with version 2.8.6, the header is copied into each member of the batch and is also available as a single `String` parameter after conversion.
+
+====
+[source, java]
+----
+@KafkaListener(id = "list2", topics = "someTopic", containerFactory = "batchFactory",
+        info = "info for batch")
+public void listen(List<Thing> list,
+        @Header(KafkaHeaders.RECEIVED_KEY) List<Integer> keys,
+        @Header(KafkaHeaders.RECEIVED_PARTITION) List<Integer> partitions,
+        @Header(KafkaHeaders.RECEIVED_TOPIC) List<String> topics,
+        @Header(KafkaHeaders.OFFSET) List<Long> offsets,
+        @Header(KafkaHeaders.LISTENER_INFO) String info) {
+            ...
+}
+----
+====
+
+NOTE: If the batch listener has a filter and the filter results in an empty batch, you will need to add `required = false` to the `@Header` parameter because the info is not available for an empty batch.
+
+If you receive `List<Message<Thing>>` the info is in the `KafkaHeaders.LISTENER_INFO` header of each `Message<?>`.
+
+See <<batch-listeners>> for more information about consuming batches.
 
 [[dead-letters]]
 ===== Publishing Dead-letter Records
