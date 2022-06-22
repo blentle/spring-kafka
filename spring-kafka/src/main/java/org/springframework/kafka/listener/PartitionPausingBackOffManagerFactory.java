@@ -51,7 +51,7 @@ public class PartitionPausingBackOffManagerFactory extends AbstractKafkaBackOffM
 	 */
 	public PartitionPausingBackOffManagerFactory(KafkaConsumerTimingAdjuster timingAdjustmentManager) {
 		this.clock = getDefaultClock();
-		setTimingAdjustmentManager(timingAdjustmentManager);
+		doSetTimingAdjustmentManager(timingAdjustmentManager);
 	}
 
 	/**
@@ -62,7 +62,7 @@ public class PartitionPausingBackOffManagerFactory extends AbstractKafkaBackOffM
 	 */
 	public PartitionPausingBackOffManagerFactory(TaskExecutor timingAdjustmentManagerTaskExecutor) {
 		this.clock = getDefaultClock();
-		setTaskExecutor(timingAdjustmentManagerTaskExecutor);
+		doSetTaskExecutor(timingAdjustmentManagerTaskExecutor);
 	}
 
 	/**
@@ -73,7 +73,7 @@ public class PartitionPausingBackOffManagerFactory extends AbstractKafkaBackOffM
 	 */
 	public PartitionPausingBackOffManagerFactory(boolean timingAdjustmentEnabled) {
 		this.clock = getDefaultClock();
-		setTimingAdjustmentEnabled(timingAdjustmentEnabled);
+		this.timingAdjustmentEnabled = timingAdjustmentEnabled;
 	}
 
 	/**
@@ -119,6 +119,10 @@ public class PartitionPausingBackOffManagerFactory extends AbstractKafkaBackOffM
 	 * @param timingAdjustmentManager the adjustmentManager to be used.
 	 */
 	public void setTimingAdjustmentManager(KafkaConsumerTimingAdjuster timingAdjustmentManager) {
+		doSetTimingAdjustmentManager(timingAdjustmentManager);
+	}
+
+	private void doSetTimingAdjustmentManager(KafkaConsumerTimingAdjuster timingAdjustmentManager) {
 		Assert.isTrue(this.timingAdjustmentEnabled, () -> "TimingAdjustment is disabled for this factory.");
 		this.timingAdjustmentManager = timingAdjustmentManager;
 	}
@@ -128,6 +132,10 @@ public class PartitionPausingBackOffManagerFactory extends AbstractKafkaBackOffM
 	 * @param taskExecutor the taskExecutor to be used.
 	 */
 	public void setTaskExecutor(TaskExecutor taskExecutor) {
+		doSetTaskExecutor(taskExecutor);
+	}
+
+	private void doSetTaskExecutor(TaskExecutor taskExecutor) {
 		Assert.isTrue(this.timingAdjustmentEnabled, () -> "TimingAdjustment is disabled for this factory.");
 		this.taskExecutor = taskExecutor;
 	}

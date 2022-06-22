@@ -44,6 +44,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
+import org.apache.kafka.clients.consumer.CommitFailedException;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRebalanceListener;
@@ -1309,9 +1310,7 @@ public class KafkaMessageListenerContainer<K, V> // NOSONAR line count
 		}
 
 		protected void pollAndInvoke() {
-			if (!this.autoCommit && !this.isRecordAck) {
-				processCommits();
-			}
+			doProcessCommits();
 			fixTxOffsetsIfNeeded();
 			idleBetweenPollIfNecessary();
 			if (this.seeks.size() > 0) {
@@ -1342,6 +1341,27 @@ public class KafkaMessageListenerContainer<K, V> // NOSONAR line count
 				resumeConsumerIfNeccessary();
 				if (!this.consumerPaused) {
 					resumePartitionsIfNecessary();
+				}
+			}
+		}
+
+		private void doProcessCommits() {
+			if (!this.autoCommit && !this.isRecordAck) {
+				try {
+					processCommits();
+				}
+				catch (CommitFailedException cfe) {
+					if (this.pendingRecordsAfterError != null && !this.isBatchListener) {
+						ConsumerRecords<K, V> pending = this.pendingRecordsAfterError;
+						this.pendingRecordsAfterError = null;
+						List<ConsumerRecord<?, ?>> records = new ArrayList<>();
+						Iterator<ConsumerRecord<K, V>> iterator = pending.iterator();
+						while (iterator.hasNext()) {
+							records.add(iterator.next());
+						}
+						this.commonErrorHandler.handleRemaining(cfe, records, this.consumer,
+								KafkaMessageListenerContainer.this.thisOrParentContainer);
+					}
 				}
 			}
 		}
@@ -1550,7 +1570,15 @@ public class KafkaMessageListenerContainer<K, V> // NOSONAR line count
 				Map<TopicPartition, OffsetAndMetadata> commits = this.commitsDuringRebalance.entrySet()
 						.stream()
 						.filter(entry -> this.assignedPartitions.contains(entry.getKey()))
-						.collect(Collectors.toMap(entry -> entry.getKey(), entry -> entry.getValue()));
+						.collect(Collectors.toMap(Entry::getKey, Entry::getValue));
+
+				Map<TopicPartition, OffsetAndMetadata> uncommitted = this.commitsDuringRebalance.entrySet()
+						.stream()
+						.filter(entry -> !this.assignedPartitions.contains(entry.getKey()))
+						.collect(Collectors.toMap(Entry::getKey, Entry::getValue));
+				this.logger.warn(() -> "These offsets could not be committed; partition(s) lost during rebalance: "
+								+ uncommitted);
+
 				this.commitsDuringRebalance.clear();
 				this.logger.debug(() -> "Commit list: " + commits);
 				commitSync(commits);
@@ -2110,6 +2138,9 @@ public class KafkaMessageListenerContainer<K, V> // NOSONAR line count
 					}
 					getAfterRollbackProcessor().clearThreadState();
 				}
+				if (!this.autoCommit && !this.isRecordAck) {
+					processCommits();
+				}
 			}
 			catch (RuntimeException e) {
 				failureTimer(sample);
@@ -2299,7 +2330,9 @@ public class KafkaMessageListenerContainer<K, V> // NOSONAR line count
 		private void invokeBatchErrorHandler(final ConsumerRecords<K, V> records,
 				@Nullable List<ConsumerRecord<K, V>> list, RuntimeException rte) {
 
-			if (this.commonErrorHandler.seeksAfterHandling() || this.transactionManager != null) {
+			if (this.commonErrorHandler.seeksAfterHandling() || this.transactionManager != null
+					|| rte instanceof CommitFailedException) {
+
 				this.commonErrorHandler.handleBatch(rte, records, this.consumer,
 						KafkaMessageListenerContainer.this.thisOrParentContainer,
 						() -> invokeBatchOnMessageWithRecordsOrList(records, list));
@@ -2672,9 +2705,14 @@ public class KafkaMessageListenerContainer<K, V> // NOSONAR line count
 		private void invokeErrorHandler(final ConsumerRecord<K, V> record,
 				Iterator<ConsumerRecord<K, V>> iterator, RuntimeException rte) {
 
-			if (this.commonErrorHandler.seeksAfterHandling()) {
-				if (this.producer == null) {
-					processCommits();
+			if (this.commonErrorHandler.seeksAfterHandling() || rte instanceof CommitFailedException) {
+				try {
+					if (this.producer == null) {
+						processCommits();
+					}
+				}
+				catch (Exception ex) { // NO SONAR
+					this.logger.error(ex, "Failed to commit before handling error");
 				}
 				List<ConsumerRecord<?, ?>> records = new ArrayList<>();
 				records.add(record);
@@ -3174,11 +3212,11 @@ public class KafkaMessageListenerContainer<K, V> // NOSONAR line count
 			}
 
 			@Override
-			public void nack(long sleepMillis) {
+			public void nack(Duration sleep) {
 				Assert.state(Thread.currentThread().equals(ListenerConsumer.this.consumerThread),
 						"nack() can only be called on the consumer thread");
-				Assert.isTrue(sleepMillis >= 0, "sleepMillis cannot be negative");
-				ListenerConsumer.this.nackSleepDurationMillis = sleepMillis;
+				Assert.isTrue(!sleep.isNegative(), "sleep cannot be negative");
+				ListenerConsumer.this.nackSleepDurationMillis = sleep.toMillis();
 				synchronized (ListenerConsumer.this) {
 					if (ListenerConsumer.this.offsetsInThisBatch != null) {
 						ListenerConsumer.this.offsetsInThisBatch.forEach((part, recs) -> recs.clear());
@@ -3221,13 +3259,13 @@ public class KafkaMessageListenerContainer<K, V> // NOSONAR line count
 			}
 
 			@Override
-			public void nack(int index, long sleepMillis) {
+			public void nack(int index, Duration sleep) {
 				Assert.state(Thread.currentThread().equals(ListenerConsumer.this.consumerThread),
 						"nack() can only be called on the consumer thread");
-				Assert.isTrue(sleepMillis >= 0, "sleepMillis cannot be negative");
+				Assert.isTrue(!sleep.isNegative(), "sleep cannot be negative");
 				Assert.isTrue(index >= 0 && index < this.records.count(), "index out of bounds");
 				ListenerConsumer.this.nackIndex = index;
-				ListenerConsumer.this.nackSleepDurationMillis = sleepMillis;
+				ListenerConsumer.this.nackSleepDurationMillis = sleep.toMillis();
 				synchronized (ListenerConsumer.this) {
 					if (ListenerConsumer.this.offsetsInThisBatch != null) {
 						ListenerConsumer.this.offsetsInThisBatch.forEach((part, recs) -> recs.clear());

@@ -1525,7 +1525,7 @@ The following example shows how to do so:
 [source, java]
 ----
 @Bean
-public KafkaListenerContainerFactory<?, ?> batchFactory() {
+public KafkaListenerContainerFactory<?> batchFactory() {
     ConcurrentKafkaListenerContainerFactory<Integer, String> factory =
             new ConcurrentKafkaListenerContainerFactory<>();
     factory.setConsumerFactory(consumerFactory());
@@ -1952,6 +1952,10 @@ The registry only maintains the life cycle of containers it manages; containers 
 A collection of managed containers can be obtained by calling the registry's `getListenerContainers()` method.
 Version 2.2.5 added a convenience method `getAllListenerContainers()`, which returns a collection of all containers, including those managed by the registry and those declared as beans.
 The collection returned will include any prototype beans that have been initialized, but it will not initialize any lazy bean declarations.
+
+IMPORTANT: Endpoints registered after the application context has been refreshed will start immediately, regardless of their `autoStartup` property, to comply with the `SmartLifecycle` contract, where `autoStartup` is only considered during application context initialization.
+An example of late registration is a bean with a `@KafkaListener` in prototype scope where an instance is created after the context is initialized.
+Starting with version 2.8.7, you can set the registry's `alwaysStartAfterRefresh` property to `false` and then the container's `autoStartup` property will define whether or not the container is started.
 
 [[kafka-validation]]
 ===== `@KafkaListener` `@Payload` Validation
@@ -2436,10 +2440,6 @@ When creating the `TopicPartitionOffset` s for the request, only positive, absol
 |[[ackMode]]<<ackMode,`ackMode`>>
 |BATCH
 |Controls how often offsets are committed - see <<committing-offsets>>.
-
-|[[ackOnError]]<<ackOnError,`ackOnError`>>
-|`false`
-|[DEPRECATED in favor of `ErrorHandler.isAckAfterHandle()`]
 
 |[[ackTime]]<<ackTime,`ackTime`>>
 |5000
@@ -3249,7 +3249,7 @@ Starting with version 2.3.4, you can add a `ContainerCustomizer` to the factory 
 [source, java]
 ----
 @Bean
-public KafkaListenerContainerFactory<?, ?> kafkaListenerContainerFactory() {
+public KafkaListenerContainerFactory<?> kafkaListenerContainerFactory() {
     ConcurrentKafkaListenerContainerFactory<Integer, String> factory =
             new ConcurrentKafkaListenerContainerFactory<>();
     ...
@@ -4329,7 +4329,7 @@ The following example shows how to do so:
 [source, java]
 ----
 @Bean
-public KafkaListenerContainerFactory<?, ?> kafkaJsonListenerContainerFactory() {
+public KafkaListenerContainerFactory<?> kafkaJsonListenerContainerFactory() {
     ConcurrentKafkaListenerContainerFactory<Integer, String> factory =
         new ConcurrentKafkaListenerContainerFactory<>();
     factory.setConsumerFactory(consumerFactory());
@@ -4607,7 +4607,7 @@ The following example creates beans that use this method:
 [source, java]
 ----
 @Bean
-public KafkaListenerContainerFactory<?, ?> kafkaListenerContainerFactory() {
+public KafkaListenerContainerFactory<?> kafkaListenerContainerFactory() {
     ConcurrentKafkaListenerContainerFactory<Integer, String> factory =
             new ConcurrentKafkaListenerContainerFactory<>();
     factory.setConsumerFactory(consumerFactory());
@@ -5137,7 +5137,6 @@ For example, with the `@KafkaListener` container factory, you can add `DefaultEr
 public ConcurrentKafkaListenerContainerFactory<String, String> kafkaListenerContainerFactory() {
     ConcurrentKafkaListenerContainerFactory<String, String> factory = new ConcurrentKafkaListenerContainerFactory();
     factory.setConsumerFactory(consumerFactory());
-    factory.getContainerProperties().setAckOnError(false);
     factory.getContainerProperties().setAckMode(AckMode.RECORD);
     factory.setCommonErrorHandler(new DefaultErrorHandler(new FixedBackOff(1000L, 2L)));
     return factory;
@@ -5624,7 +5623,7 @@ DeadLetterPublishingRecoverer recoverer = new DeadLetterPublishingRecoverer(temp
                 return new TopicPartition(r.topic() + ".other.failures", r.partition());
             }
         });
-ErrorHandler errorHandler = new DefaultErrorHandler(recoverer, new FixedBackOff(0L, 2L));
+CommonErrorHandler errorHandler = new DefaultErrorHandler(recoverer, new FixedBackOff(0L, 2L));
 ----
 ====
 

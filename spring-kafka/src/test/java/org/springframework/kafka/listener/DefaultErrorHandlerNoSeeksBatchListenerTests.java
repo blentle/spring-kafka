@@ -18,6 +18,7 @@ package org.springframework.kafka.listener;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willAnswer;
@@ -97,9 +98,10 @@ public class DefaultErrorHandlerNoSeeksBatchListenerTests {
 	 */
 	@SuppressWarnings("unchecked")
 	@Test
-	void retriesWithNoSeeksAckModeBatch() throws Exception {
+	void retriesWithNoSeeksBatchListener() throws Exception {
 		assertThat(this.config.deliveryLatch.await(10, TimeUnit.SECONDS)).isTrue();
 		assertThat(this.config.pollLatch.await(10, TimeUnit.SECONDS)).isTrue();
+		assertThat(this.config.commitLatch.await(10, TimeUnit.SECONDS)).isTrue();
 		this.registry.stop();
 		assertThat(this.config.closeLatch.await(10, TimeUnit.SECONDS)).isTrue();
 		InOrder inOrder = inOrder(this.consumer, this.producer);
@@ -110,11 +112,11 @@ public class DefaultErrorHandlerNoSeeksBatchListenerTests {
 		offsets.put(new TopicPartition("foo", 1), new OffsetAndMetadata(1L));
 		inOrder.verify(this.consumer).commitSync(offsets, Duration.ofSeconds(60));
 		inOrder.verify(this.consumer).pause(any());
-		inOrder.verify(this.consumer).resume(any());
 		offsets = new LinkedHashMap<>();
 		offsets.put(new TopicPartition("foo", 1), new OffsetAndMetadata(2L));
 		offsets.put(new TopicPartition("foo", 2), new OffsetAndMetadata(2L));
 		inOrder.verify(this.consumer).commitSync(offsets, Duration.ofSeconds(60));
+		inOrder.verify(this.consumer).resume(any());
 		assertThat(this.config.ehException).isInstanceOf(ListenerExecutionFailedException.class);
 		assertThat(((ListenerExecutionFailedException) this.config.ehException).getGroupId()).isEqualTo(CONTAINER_ID);
 		assertThat(this.config.contents).contains("foo", "bar", "baz", "qux", "qux", "qux", "fiz", "buz");
@@ -129,6 +131,8 @@ public class DefaultErrorHandlerNoSeeksBatchListenerTests {
 		final CountDownLatch deliveryLatch = new CountDownLatch(2);
 
 		final CountDownLatch closeLatch = new CountDownLatch(1);
+
+		final CountDownLatch commitLatch = new CountDownLatch(2);
 
 		final AtomicBoolean fail = new AtomicBoolean(true);
 
@@ -199,6 +203,10 @@ public class DefaultErrorHandlerNoSeeksBatchListenerTests {
 						return new ConsumerRecords(Collections.emptyMap());
 				}
 			}).given(consumer).poll(Duration.ofMillis(ContainerProperties.DEFAULT_POLL_TIMEOUT));
+			willAnswer(i -> {
+				this.commitLatch.countDown();
+				return null;
+			}).given(consumer).commitSync(anyMap(), any());
 			willAnswer(i -> {
 				this.closeLatch.countDown();
 				return null;
