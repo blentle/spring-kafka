@@ -555,6 +555,11 @@ You can use this future to determine the result of the send operation.
 
 If the first method is used, or the `replyTimeout` argument is `null`, the template's `defaultReplyTimeout` property is used (5 seconds by default).
 
+Starting with version 2.8.8, the template has a new method `waitForAssignment`.
+This is useful if the reply container is configured with `auto.offset.reset=latest` to avoid sending a request and a reply sent before the container is initialized.
+
+IMPORTANT: When using manual partition assignment (no group management), the duration for the wait must be greater than the container's `pollTimeout` property because the notification will not be sent until after the first poll is completed.
+
 The following Spring Boot application shows an example of how to use the feature:
 
 ====
@@ -570,6 +575,9 @@ public class KRequestingApplication {
     @Bean
     public ApplicationRunner runner(ReplyingKafkaTemplate<String, String, String> template) {
         return args -> {
+            if (!template.waitForAssignment(Duration.ofSeconds(10))) {
+                throw new IllegalStateException("Reply container did not initialize");
+            }
             ProducerRecord<String, String> record = new ProducerRecord<>("kRequests", "foo");
             RequestReplyFuture<String, String, String> replyFuture = template.sendAndReceive(record);
             SendResult<String, String> sendResult = replyFuture.getSendFuture().get(10, TimeUnit.SECONDS);
@@ -2770,6 +2778,8 @@ An error message is also logged when this condition occurs.
 * `ConsumerStoppingEvent`: published by each consumer just before stopping.
 * `ConsumerStoppedEvent`: published after the consumer is closed.
 See <<thread-safety>>.
+* `ConsumerRetryAuthEvent`: published when authentication or authorization of a consumer fails and is being retried.
+* `ConsumerRetryAuthSuccessfulEvent`: published when authentication or authorization has been retried successfully. Can only occur when there has been a `ConsumerRetryAuthEvent` before.
 * `ContainerStoppedEvent`: published when all consumers have stopped.
 
 IMPORTANT: By default, the application context's event multicaster invokes event listeners on the calling thread.
@@ -2829,7 +2839,15 @@ The `ConsumerPartitionPausedEvent`, `ConsumerPartitionResumedEvent` events have 
 * `container`: The listener container or the parent listener container, if the source container is a child.
 * `partition`: The `TopicPartition` instance involved.
 
-The `ConsumerStartingEvent`, `ConsumerStartingEvent`, `ConsumerFailedToStartEvent`, `ConsumerStoppedEvent` and `ContainerStoppedEvent` events have the following properties:
+The `ConsumerRetryAuthEvent` event has the following properties:
+
+* `source`: The listener container instance that published the event.
+* `container`: The listener container or the parent listener container, if the source container is a child.
+* `reason`
+** `AUTHENTICATION` - the event was published because of an authentication exception.
+** `AUTHORIZATION` - the event was published because of an authorization exception.
+
+The `ConsumerStartingEvent`, `ConsumerStartingEvent`, `ConsumerFailedToStartEvent`, `ConsumerStoppedEvent`, `ConsumerRetryAuthSuccessfulEvent` and `ContainerStoppedEvent` events have the following properties:
 
 * `source`: The listener container instance that published the event.
 * `container`: The listener container or the parent listener container, if the source container is a child.
@@ -4744,6 +4762,8 @@ public interface KafkaHeaderMapper {
 ----
 ====
 
+The `SimpleKafkaHeaderMapper` maps raw headers as `byte[]`, with configuration options for conversion to `String` values.
+
 The `DefaultKafkaHeaderMapper` maps the key to the `MessageHeaders` header name and, in order to support rich header types for outbound messages, JSON conversion is performed.
 A "`special`" header (with a key of `spring_json_header_types`) contains a JSON map of `<key>:<type>`.
 This header is used on the inbound side to provide appropriate conversion of each header value to the original type.
@@ -4831,6 +4851,35 @@ public void testSpecificStringConvert() {
 }
 ----
 ====
+
+Both header mappers map all inbound headers, by default.
+Starting with version 2.8.8, the patterns, can also applied to inbound mapping.
+To create a mapper for inbound mapping, use one of the static methods on the respective mapper:
+
+====
+[source, java]
+----
+public static DefaultKafkaHeaderMapper forInboundOnlyWithMatchers(String... patterns) {
+}
+
+public static DefaultKafkaHeaderMapper forInboundOnlyWithMatchers(ObjectMapper objectMapper, String... patterns) {
+}
+
+public static SimpleKafkaHeaderMapper forInboundOnlyWithMatchers(String... patterns) {
+}
+----
+====
+
+For example:
+
+====
+[source, java]
+----
+DefaultKafkaHeaderMapper inboundMapper = DefaultKafkaHeaderMapper.forInboundOnlyWithMatchers("!abc*", "*");
+----
+====
+
+This will exclude all headers beginning with `abc` and include all others.
 
 By default, the `DefaultKafkaHeaderMapper` is used in the `MessagingMessageConverter` and `BatchMessagingMessageConverter`, as long as Jackson is on the class path.
 
@@ -5098,6 +5147,16 @@ By default, if an annotated listener method throws an exception, it is thrown to
 The container commits any pending offset commits before calling the error handler.
 
 If you are using Spring Boot, you simply need to add the error handler as a `@Bean` and Boot will add it to the auto-configured factory.
+
+[[backoff-handlers]]
+===== Back Off Handlers
+
+Error handlers such as the <<default-eh>> use a `BackOff` to determine how long to wait before retrying a delivery.
+Starting with version 2.9, you can configure a custom `BackOffHandler`.
+The default handler simply suspends the thread until the back off time passes (or the container is stopped).
+The framework also provides the `ContainerPausingBackOffHandler` which pauses the listener container until the back off time passes and then resumes the container.
+This is useful when the delays are longer than the `max.poll.interval.ms` consumer property.
+Note that the resolution of the actual back off time will be affected by the `pollTimeout` container property.
 
 [[default-eh]]
 ===== DefaultErrorHandler

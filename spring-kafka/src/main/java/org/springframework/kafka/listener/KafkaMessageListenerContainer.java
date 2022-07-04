@@ -82,6 +82,8 @@ import org.springframework.kafka.event.ConsumerPartitionPausedEvent;
 import org.springframework.kafka.event.ConsumerPartitionResumedEvent;
 import org.springframework.kafka.event.ConsumerPausedEvent;
 import org.springframework.kafka.event.ConsumerResumedEvent;
+import org.springframework.kafka.event.ConsumerRetryAuthEvent;
+import org.springframework.kafka.event.ConsumerRetryAuthSuccessfulEvent;
 import org.springframework.kafka.event.ConsumerStartedEvent;
 import org.springframework.kafka.event.ConsumerStartingEvent;
 import org.springframework.kafka.event.ConsumerStoppedEvent;
@@ -146,6 +148,7 @@ import org.springframework.util.concurrent.ListenableFutureCallback;
  * @author Lukasz Kaminski
  * @author Tomaz Fernandes
  * @author Francois Rosiere
+ * @author Daniel Gentes
  */
 public class KafkaMessageListenerContainer<K, V> // NOSONAR line count
 		extends AbstractMessageListenerContainer<K, V> {
@@ -529,6 +532,30 @@ public class KafkaMessageListenerContainer<K, V> // NOSONAR line count
 		}
 	}
 
+	private void publishRetryAuthEvent(Throwable throwable) {
+		ApplicationEventPublisher publisher = getApplicationEventPublisher();
+		if (publisher != null) {
+			ConsumerRetryAuthEvent.Reason reason;
+			if (throwable instanceof AuthenticationException) {
+				reason = ConsumerRetryAuthEvent.Reason.AUTHENTICATION;
+			}
+			else if (throwable instanceof AuthorizationException) {
+				reason = ConsumerRetryAuthEvent.Reason.AUTHORIZATION;
+			}
+			else {
+				throw new IllegalArgumentException("Only Authentication or Authorization Excetions are allowed", throwable);
+			}
+			publisher.publishEvent(new ConsumerRetryAuthEvent(this, this.thisOrParentContainer, reason));
+		}
+	}
+
+	private void publishRetryAuthSuccessfulEvent() {
+		ApplicationEventPublisher publisher = getApplicationEventPublisher();
+		if (publisher != null) {
+			publisher.publishEvent(new ConsumerRetryAuthSuccessfulEvent(this, this.thisOrParentContainer));
+		}
+	}
+
 	@Override
 	protected AbstractMessageListenerContainer<?, ?> parentOrThis() {
 		return this.thisOrParentContainer;
@@ -760,6 +787,8 @@ public class KafkaMessageListenerContainer<K, V> // NOSONAR line count
 		private volatile Thread consumerThread;
 
 		private volatile long lastPoll = System.currentTimeMillis();
+
+		private boolean firstPoll;
 
 		@SuppressWarnings(UNCHECKED)
 		ListenerConsumer(GenericMessageListener<?> listener, ListenerType listenerType) {
@@ -1235,9 +1264,14 @@ public class KafkaMessageListenerContainer<K, V> // NOSONAR line count
 			initAssignedPartitions();
 			publishConsumerStartedEvent();
 			Throwable exitThrowable = null;
+			boolean failedAuthRetry = false;
 			while (isRunning()) {
 				try {
 					pollAndInvoke();
+					if (failedAuthRetry) {
+						publishRetryAuthSuccessfulEvent();
+						failedAuthRetry = false;
+					}
 				}
 				catch (NoOffsetForPartitionException nofpe) {
 					this.fatalError = true;
@@ -1257,6 +1291,8 @@ public class KafkaMessageListenerContainer<K, V> // NOSONAR line count
 						ListenerConsumer.this.logger.error(ae,
 								"Authentication/Authorization Exception, retrying in "
 										+ this.authExceptionRetryInterval.toMillis() + " ms");
+						publishRetryAuthEvent(ae);
+						failedAuthRetry = true;
 						// We can't pause/resume here, as KafkaConsumer doesn't take pausing
 						// into account when committing, hence risk of being flooded with
 						// GroupAuthorizationExceptions.
@@ -1333,6 +1369,10 @@ public class KafkaMessageListenerContainer<K, V> // NOSONAR line count
 					this.logger.debug(() -> "Discarding polled records, container stopped: " + records.count());
 				}
 				return;
+			}
+			if (!this.firstPoll && this.definedPartitions != null && this.consumerSeekAwareListener != null) {
+				this.firstPoll = true;
+				this.consumerSeekAwareListener.onFirstPoll();
 			}
 			debugRecords(records);
 
@@ -3368,6 +3408,12 @@ public class KafkaMessageListenerContainer<K, V> // NOSONAR line count
 				}
 				else {
 					this.userListener.onPartitionsAssigned(partitions);
+				}
+				if (!ListenerConsumer.this.firstPoll && ListenerConsumer.this.definedPartitions == null
+						&& ListenerConsumer.this.consumerSeekAwareListener != null) {
+
+					ListenerConsumer.this.firstPoll = true;
+					ListenerConsumer.this.consumerSeekAwareListener.onFirstPoll();
 				}
 			}
 

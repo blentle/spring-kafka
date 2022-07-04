@@ -23,6 +23,7 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.common.errors.SerializationException;
 
+import org.springframework.kafka.support.KafkaUtils;
 import org.springframework.lang.Nullable;
 import org.springframework.util.backoff.BackOff;
 
@@ -86,7 +87,21 @@ public class DefaultErrorHandler extends FailedBatchProcessor implements CommonE
 	 * @param backOff the {@link BackOff}.
 	 */
 	public DefaultErrorHandler(@Nullable ConsumerRecordRecoverer recoverer, BackOff backOff) {
-		super(recoverer, backOff, createFallback(backOff, recoverer));
+		this(recoverer, backOff, null);
+	}
+
+	/**
+	 * Construct an instance with the provided recoverer which will be called after the
+	 * backOff returns STOP for a topic/partition/offset.
+	 * @param recoverer the recoverer; if null, the default (logging) recoverer is used.
+	 * @param backOff the {@link BackOff}.
+	 * @param backOffHandler the {@link BackOffHandler}.
+	 * @since 2.9
+	 */
+	public DefaultErrorHandler(@Nullable ConsumerRecordRecoverer recoverer, BackOff backOff,
+			@Nullable BackOffHandler backOffHandler) {
+
+		super(recoverer, backOff, backOffHandler, createFallback(backOff, recoverer));
 	}
 
 	private static CommonErrorHandler createFallback(BackOff backOff, @Nullable ConsumerRecordRecoverer recoverer) {
@@ -140,6 +155,7 @@ public class DefaultErrorHandler extends FailedBatchProcessor implements CommonE
 			return getFailureTracker().recovered(record, thrownException, container, consumer);
 		}
 		catch (Exception ex) {
+			logger.error(ex, "Failed to handle " + KafkaUtils.format(record) + " with " + thrownException);
 			return false;
 		}
 	}
