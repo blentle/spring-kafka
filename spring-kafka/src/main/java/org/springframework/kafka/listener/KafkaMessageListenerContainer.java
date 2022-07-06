@@ -782,6 +782,8 @@ public class KafkaMessageListenerContainer<K, V> // NOSONAR line count
 
 		private ConsumerRecords<K, V> pendingRecordsAfterError;
 
+		private boolean pauseForPending;
+
 		private volatile boolean consumerPaused;
 
 		private volatile Thread consumerThread;
@@ -1566,8 +1568,13 @@ public class KafkaMessageListenerContainer<K, V> // NOSONAR line count
 								+ "after an error; emergency stop invoked to avoid message loss", howManyRecords));
 						KafkaMessageListenerContainer.this.emergencyStop.run();
 					}
-					records = this.pendingRecordsAfterError;
-					this.pendingRecordsAfterError = null;
+					TopicPartition firstPart = this.pendingRecordsAfterError.partitions().iterator().next();
+					boolean isPaused = isPartitionPauseRequested(firstPart);
+					this.logger.debug(() -> "First pending after error: " + firstPart + "; paused: " + isPaused);
+					if (!isPaused) {
+						records = this.pendingRecordsAfterError;
+						this.pendingRecordsAfterError = null;
+					}
 				}
 				captureOffsets(records);
 				checkRebalanceCommits();
@@ -1680,10 +1687,11 @@ public class KafkaMessageListenerContainer<K, V> // NOSONAR line count
 				this.logger.debug(() -> "Pausing for incomplete async acks: " + this.offsetsInThisBatch);
 			}
 			if (!this.consumerPaused && (isPaused() || this.pausedForAsyncAcks)
-					|| this.pendingRecordsAfterError != null) {
+					|| this.pauseForPending) {
 
 				this.consumer.pause(this.consumer.assignment());
 				this.consumerPaused = true;
+				this.pauseForPending = false;
 				this.logger.debug(() -> "Paused consumption from: " + this.consumer.paused());
 				publishConsumerPausedEvent(this.consumer.assignment());
 			}
@@ -2383,6 +2391,7 @@ public class KafkaMessageListenerContainer<K, V> // NOSONAR line count
 						() -> invokeBatchOnMessageWithRecordsOrList(records, list));
 				if (!afterHandling.isEmpty()) {
 					this.pendingRecordsAfterError = afterHandling;
+					this.pauseForPending = true;
 				}
 			}
 		}
@@ -2776,6 +2785,7 @@ public class KafkaMessageListenerContainer<K, V> // NOSONAR line count
 				}
 				if (records.size() > 0) {
 					this.pendingRecordsAfterError = new ConsumerRecords<>(records);
+					this.pauseForPending = true;
 				}
 			}
 		}
