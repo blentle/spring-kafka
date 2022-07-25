@@ -22,6 +22,7 @@ import java.time.ZoneId;
 import java.util.Optional;
 
 import org.apache.commons.logging.LogFactory;
+import org.apache.kafka.common.TopicPartition;
 
 import org.springframework.core.log.LogAccessor;
 import org.springframework.lang.Nullable;
@@ -81,11 +82,35 @@ public class ListenerContainerPauseService {
 		}
 		else {
 			Instant resumeAt = Instant.now().plusMillis(pauseDuration.toMillis());
-			LOGGER.debug(() -> "Pausing container " + messageListenerContainer + "resume scheduled for "
+			LOGGER.debug(() -> "Pausing container " + messageListenerContainer + ", resume scheduled for "
 					+ resumeAt.atZone(ZoneId.systemDefault()).toLocalDateTime());
 			messageListenerContainer.pause();
-			this.scheduler.schedule(() -> resume(messageListenerContainer), resumeAt);
+			this.scheduler.schedule(() -> {
+				LOGGER.debug(() -> "Pausing container " + messageListenerContainer);
+				resume(messageListenerContainer);
+			}, resumeAt);
 		}
+	}
+
+	/**
+	 * Pause consumption from a given partition for the duration.
+	 * @param messageListenerContainer the container.
+	 * @param partition the partition.
+	 * @param pauseDuration the duration.
+	 */
+	public void pausePartition(MessageListenerContainer messageListenerContainer, TopicPartition partition,
+			Duration pauseDuration) {
+
+		Instant resumeAt = Instant.now().plusMillis(pauseDuration.toMillis());
+		LOGGER.debug(() -> "Pausing container: " + messageListenerContainer + " partition: " + partition
+				+ ", resume scheduled for "
+				+ resumeAt.atZone(ZoneId.systemDefault()).toLocalDateTime());
+		messageListenerContainer.pausePartition(partition);
+		this.scheduler.schedule(() -> {
+			LOGGER.debug(() -> "Resuming container: " + messageListenerContainer + " partition: " + partition);
+			messageListenerContainer.resumePartition(partition);
+		}, resumeAt);
+
 	}
 
 	/**
@@ -111,8 +136,11 @@ public class ListenerContainerPauseService {
 		}
 	}
 
+	/*
+	 * Callers must ensure this.registry is not null before calling.
+	 */
 	private Optional<MessageListenerContainer> getListenerContainer(String listenerId) {
-		MessageListenerContainer messageListenerContainer = this.registry.getListenerContainer(listenerId);
+		MessageListenerContainer messageListenerContainer = this.registry.getListenerContainer(listenerId); // NOSONAR
 		if (messageListenerContainer == null) {
 			LOGGER.warn(() -> "MessageListenerContainer " + listenerId + " does not exists");
 		}

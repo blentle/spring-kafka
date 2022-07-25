@@ -39,11 +39,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
@@ -153,7 +156,6 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.EnableTransactionManagement;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.MimeType;
-import org.springframework.util.concurrent.ListenableFuture;
 import org.springframework.validation.Errors;
 import org.springframework.validation.Validator;
 
@@ -1440,7 +1442,7 @@ public class EnableKafkaIntegrationTests {
 			return new KafkaTemplate<Integer, String>(producerFactory(), true) {
 
 				@Override
-				public ListenableFuture<SendResult<Integer, String>> send(String topic, String data) {
+				public CompletableFuture<SendResult<Integer, String>> send(String topic, String data) {
 					return super.send(topic, 0, null, data);
 				}
 
@@ -1453,7 +1455,7 @@ public class EnableKafkaIntegrationTests {
 			return new KafkaTemplate<Integer, Object>(jsonProducerFactory(), true) {
 
 				@Override
-				public ListenableFuture<SendResult<Integer, Object>> send(String topic, Object data) {
+				public CompletableFuture<SendResult<Integer, Object>> send(String topic, Object data) {
 					return super.send(topic, 0, null, data);
 				}
 
@@ -2240,6 +2242,10 @@ public class EnableKafkaIntegrationTests {
 
 		final CountDownLatch latch4 = new CountDownLatch(2);
 
+		final AtomicInteger idleRewinds = new AtomicInteger();
+
+		final Semaphore semaphore = new Semaphore(0);
+
 		final Set<Thread> consumerThreads = ConcurrentHashMap.newKeySet();
 
 		@KafkaListener(id = "seekOnIdle", topics = "seekOnIdle", autoStartup = "false", concurrency = "2",
@@ -2249,13 +2255,20 @@ public class EnableKafkaIntegrationTests {
 			this.latch2.countDown();
 			this.latch1.countDown();
 			ack.acknowledge();
+			this.semaphore.release();
 		}
 
 		@Override
 		public void onIdleContainer(Map<org.apache.kafka.common.TopicPartition, Long> assignments,
 				ConsumerSeekCallback callback) {
 
-			if (this.latch1.getCount() > 0) {
+			if (this.semaphore.availablePermits() > 0 && this.idleRewinds.getAndIncrement() < 10) {
+				try {
+					this.semaphore.acquire();
+				}
+				catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+				}
 				assignments.keySet().forEach(tp -> callback.seekRelative(tp.topic(), tp.partition(), -1, true));
 			}
 		}

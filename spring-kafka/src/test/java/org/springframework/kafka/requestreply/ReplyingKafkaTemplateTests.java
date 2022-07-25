@@ -34,6 +34,7 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -219,9 +220,10 @@ public class ReplyingKafkaTemplateTests {
 		try {
 			template.setMessageConverter(new StringJsonMessageConverter());
 			template.setDefaultReplyTimeout(Duration.ofSeconds(30));
-			RequestReplyMessageFuture<Integer, String> fut = template.sendAndReceive(MessageBuilder.withPayload("foo")
-					.setHeader(KafkaHeaders.TOPIC, A_REQUEST)
-					.build());
+			RequestReplyMessageFuture<Integer, String> fut = template
+					.sendAndReceive(MessageBuilder.withPayload("foo")
+							.setHeader(KafkaHeaders.TOPIC, A_REQUEST)
+							.build());
 			fut.getSendFuture().get(10, TimeUnit.SECONDS); // send ok
 			Message<?> reply = fut.get(30, TimeUnit.SECONDS);
 			assertThat(reply.getPayload()).isEqualTo("FOO");
@@ -448,6 +450,7 @@ public class ReplyingKafkaTemplateTests {
 		AggregatingReplyingKafkaTemplate<Integer, String, String> template = aggregatingTemplate(
 				new TopicPartitionOffset(D_REPLY, 0), 2, new AtomicInteger());
 		try {
+			template.setCorrelationHeaderName("customCorrelation");
 			template.setDefaultReplyTimeout(Duration.ofSeconds(30));
 			ProducerRecord<Integer, String> record = new ProducerRecord<>(D_REQUEST, null, null, null, "foo");
 			RequestReplyFuture<Integer, String, Collection<ConsumerRecord<Integer, String>>> future =
@@ -710,7 +713,7 @@ public class ReplyingKafkaTemplateTests {
 
 	@SuppressWarnings({ "rawtypes", "unchecked" })
 	@Test
-	void requestTimeoutWithMessage() {
+	void requestTimeoutWithMessage() throws Exception {
 		ProducerFactory pf = mock(ProducerFactory.class);
 		Producer producer = mock(Producer.class);
 		willAnswer(invocation -> {
@@ -726,7 +729,7 @@ public class ReplyingKafkaTemplateTests {
 				.setHeader(KafkaHeaders.TOPIC, "foo")
 				.build();
 		long t1 = System.currentTimeMillis();
-		RequestReplyTypedMessageFuture<String, String, Foo> future = template.sendAndReceive(msg, Duration.ofMillis(10),
+		CompletableFuture future = template.sendAndReceive(msg, Duration.ofMillis(10),
 				new ParameterizedTypeReference<Foo>() {
 				});
 		try {
@@ -838,14 +841,18 @@ public class ReplyingKafkaTemplateTests {
 
 		@KafkaListener(id = "def1", topics = { D_REQUEST, E_REQUEST, F_REQUEST })
 		@SendTo  // default REPLY_TOPIC header
-		public String dListener1(String in) {
-			return in.toUpperCase();
+		public Message<String> dListener1(String in, @Header("customCorrelation") byte[] correlation) {
+			return MessageBuilder.withPayload(in.toUpperCase())
+					.setHeader("customCorrelation", correlation)
+					.build();
 		}
 
 		@KafkaListener(id = "def2", topics = { D_REQUEST, E_REQUEST, F_REQUEST })
 		@SendTo  // default REPLY_TOPIC header
-		public String dListener2(String in) {
-			return in.substring(0, 1) + in.substring(1).toUpperCase();
+		public Message<String> dListener2(String in, @Header("customCorrelation") byte[] correlation) {
+			return MessageBuilder.withPayload(in.substring(0, 1) + in.substring(1).toUpperCase())
+					.setHeader("customCorrelation", correlation)
+					.build();
 		}
 
 		@KafkaListener(id = G_REQUEST, topics = G_REQUEST)

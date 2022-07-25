@@ -756,7 +756,7 @@ public class KafkaMessageListenerContainerTests {
 		final CountDownLatch pauseLatch = new CountDownLatch(1);
 		willAnswer(inv -> {
 			paused.set(true);
-			pausedParts.set(inv.getArgument(0));
+			pausedParts.set(new HashSet<>(inv.getArgument(0)));
 			pauseLatch.countDown();
 			return null;
 		}).given(consumer).pause(any());
@@ -2561,7 +2561,7 @@ public class KafkaMessageListenerContainerTests {
 			pauseLatch1.countDown();
 			pauseLatch2.countDown();
 			return null;
-		}).given(consumer).pause(records.keySet());
+		}).given(consumer).pause(any());
 		given(consumer.paused()).willReturn(pausedParts);
 		CountDownLatch pollWhilePausedLatch = new CountDownLatch(2);
 		given(consumer.poll(any(Duration.class))).willAnswer(i -> {
@@ -2803,6 +2803,11 @@ public class KafkaMessageListenerContainerTests {
 				.asInstanceOf(InstanceOfAssertFactories.collection(TopicPartition.class))
 				.hasSize(1)
 				.contains(tp0);
+		assertThat(container)
+				.extracting("pauseRequestedPartitions")
+				.asInstanceOf(InstanceOfAssertFactories.collection(TopicPartition.class))
+				.hasSize(2)
+				.contains(tp0, tp1);
 		suspendConsumerThread.countDown();
 		container.stop();
 	}
