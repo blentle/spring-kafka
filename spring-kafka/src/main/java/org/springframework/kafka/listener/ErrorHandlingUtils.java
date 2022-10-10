@@ -17,10 +17,14 @@
 package org.springframework.kafka.listener;
 
 import java.time.Duration;
+import java.util.List;
+import java.util.Set;
 import java.util.function.BiConsumer;
 
 import org.apache.kafka.clients.consumer.Consumer;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
+import org.apache.kafka.common.TopicPartition;
 
 import org.springframework.core.log.LogAccessor;
 import org.springframework.kafka.KafkaException;
@@ -54,16 +58,26 @@ public final class ErrorHandlingUtils {
 	 * @param recoverer the recoverer.
 	 * @param logger the logger.
 	 * @param logLevel the log level.
+	 * @param retryListeners the retry listeners.
 	 */
 	public static void retryBatch(Exception thrownException, ConsumerRecords<?, ?> records, Consumer<?, ?> consumer,
 			MessageListenerContainer container, Runnable invokeListener, BackOff backOff,
 			CommonErrorHandler seeker, BiConsumer<ConsumerRecords<?, ?>, Exception> recoverer, LogAccessor logger,
-			KafkaException.Level logLevel) {
+			KafkaException.Level logLevel, List<RetryListener> retryListeners) {
 
 		BackOffExecution execution = backOff.start();
 		long nextBackOff = execution.nextBackOff();
 		String failed = null;
-		consumer.pause(consumer.assignment());
+		Set<TopicPartition> assignment = consumer.assignment();
+		consumer.pause(assignment);
+		int attempt = 1;
+		listen(retryListeners, records, thrownException, attempt++);
+		ConsumerRecord<?, ?> first = records.iterator().next();
+		MessageListenerContainer childOrSingle = container.getContainerFor(first.topic(), first.partition());
+		if (childOrSingle instanceof ConsumerPauseResumeEventPublisher) {
+			((ConsumerPauseResumeEventPublisher) childOrSingle)
+					.publishConsumerPausedEvent(assignment, "For batch retry");
+		}
 		try {
 			while (nextBackOff != BackOffExecution.STOP) {
 				consumer.poll(Duration.ZERO);
@@ -82,26 +96,39 @@ public final class ErrorHandlingUtils {
 					invokeListener.run();
 					return;
 				}
-				catch (Exception e) {
+				catch (Exception ex) {
+					listen(retryListeners, records, ex, attempt++);
 					if (failed == null) {
 						failed = recordsToString(records);
 					}
 					String toLog = failed;
-					logger.debug(e, () -> "Retry failed for: " + toLog);
+					logger.debug(ex, () -> "Retry failed for: " + toLog);
 				}
 				nextBackOff = execution.nextBackOff();
 			}
 			try {
 				recoverer.accept(records, thrownException);
+				retryListeners.forEach(listener -> listener.recovered(records, thrownException));
 			}
-			catch (Exception e) {
-				logger.error(e, () -> "Recoverer threw an exception; re-seeking batch");
+			catch (Exception ex) {
+				logger.error(ex, () -> "Recoverer threw an exception; re-seeking batch");
+				retryListeners.forEach(listener -> listener.recoveryFailed(records, thrownException, ex));
 				seeker.handleBatch(thrownException, records, consumer, container, () -> { });
 			}
 		}
 		finally {
-			consumer.resume(consumer.assignment());
+			Set<TopicPartition> assignment2 = consumer.assignment();
+			consumer.resume(assignment2);
+			if (childOrSingle instanceof ConsumerPauseResumeEventPublisher) {
+				((ConsumerPauseResumeEventPublisher) childOrSingle).publishConsumerResumedEvent(assignment2);
+			}
 		}
+	}
+
+	private static void listen(List<RetryListener> listeners, ConsumerRecords<?, ?> records,
+			Exception thrownException, int attempt) {
+
+		listeners.forEach(listener -> listener.failedDelivery(records, thrownException, attempt));
 	}
 
 	/**

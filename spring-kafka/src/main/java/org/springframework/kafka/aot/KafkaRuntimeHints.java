@@ -27,8 +27,6 @@ import org.apache.kafka.clients.consumer.RoundRobinAssignor;
 import org.apache.kafka.clients.consumer.StickyAssignor;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.RoundRobinPartitioner;
-import org.apache.kafka.clients.producer.UniformStickyPartitioner;
-import org.apache.kafka.clients.producer.internals.DefaultPartitioner;
 import org.apache.kafka.common.message.CreateTopicsRequestData.CreatableTopic;
 import org.apache.kafka.common.protocol.Message;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
@@ -58,13 +56,8 @@ import org.springframework.aot.hint.MemberCategory;
 import org.springframework.aot.hint.ReflectionHints;
 import org.springframework.aot.hint.RuntimeHints;
 import org.springframework.aot.hint.RuntimeHintsRegistrar;
-import org.springframework.aot.hint.support.RuntimeHintsUtils;
 import org.springframework.kafka.annotation.KafkaBootstrapConfiguration;
-import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.annotation.KafkaListenerAnnotationBeanPostProcessor;
-import org.springframework.kafka.annotation.KafkaListeners;
-import org.springframework.kafka.annotation.PartitionOffset;
-import org.springframework.kafka.annotation.TopicPartition;
 import org.springframework.kafka.config.AbstractKafkaListenerContainerFactory;
 import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
 import org.springframework.kafka.config.KafkaListenerContainerFactory;
@@ -100,14 +93,11 @@ import org.springframework.lang.Nullable;
  * @since 3.0
  *
  */
-public class KafkaRuntimeHintsRegistrar implements RuntimeHintsRegistrar {
+public class KafkaRuntimeHints implements RuntimeHintsRegistrar {
 
+	@SuppressWarnings("deprecation")
 	@Override
 	public void registerHints(RuntimeHints hints, @Nullable ClassLoader classLoader) {
-		RuntimeHintsUtils.registerAnnotation(hints, KafkaListener.class);
-		RuntimeHintsUtils.registerAnnotation(hints, KafkaListeners.class);
-		RuntimeHintsUtils.registerAnnotation(hints, PartitionOffset.class);
-		RuntimeHintsUtils.registerAnnotation(hints, TopicPartition.class);
 		ReflectionHints reflectionHints = hints.reflection();
 		Stream.of(
 					ConsumerProperties.class,
@@ -156,9 +146,9 @@ public class KafkaRuntimeHintsRegistrar implements RuntimeHintsRegistrar {
 					RoundRobinAssignor.class,
 					StickyAssignor.class,
 					// standard partitioners
-					DefaultPartitioner.class,
+					org.apache.kafka.clients.producer.internals.DefaultPartitioner.class,
 					RoundRobinPartitioner.class,
-					UniformStickyPartitioner.class,
+					org.apache.kafka.clients.producer.UniformStickyPartitioner.class,
 					// standard serialization
 					ByteArrayDeserializer.class,
 					ByteArraySerializer.class,

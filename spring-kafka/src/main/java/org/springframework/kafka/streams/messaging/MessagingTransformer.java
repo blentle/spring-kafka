@@ -44,8 +44,10 @@ import org.springframework.util.Assert;
  *
  * @author Gary Russell
  * @since 2.3
+ * @deprecated in favor of {@link MessagingProcessor}.
  *
  */
+@Deprecated
 public class MessagingTransformer<K, V, R> implements Transformer<K, V, KeyValue<K, R>> {
 
 	private final MessagingFunction function;

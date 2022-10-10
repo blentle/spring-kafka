@@ -107,7 +107,7 @@ public class DefaultErrorHandler extends FailedBatchProcessor implements CommonE
 	}
 
 	private static CommonErrorHandler createFallback(BackOff backOff, @Nullable ConsumerRecordRecoverer recoverer) {
-		return new ErrorHandlerAdapter(new FallbackBatchErrorHandler(backOff, recoverer));
+		return new FallbackBatchErrorHandler(backOff, recoverer);
 	}
 
 	/**
@@ -134,7 +134,7 @@ public class DefaultErrorHandler extends FailedBatchProcessor implements CommonE
 	}
 
 	@Override
-	@Deprecated
+	@Deprecated(since = "2.9", forRemoval = true) // in 3.1
 	public boolean remainingRecords() {
 		return isSeekAfterError();
 	}
@@ -157,7 +157,12 @@ public class DefaultErrorHandler extends FailedBatchProcessor implements CommonE
 			return getFailureTracker().recovered(record, thrownException, container, consumer);
 		}
 		catch (Exception ex) {
-			logger.error(ex, "Failed to handle " + KafkaUtils.format(record) + " with " + thrownException);
+			if (SeekUtils.isBackoffException(thrownException)) {
+				this.logger.debug(ex, "Failed to handle " + KafkaUtils.format(record) + " with " + thrownException);
+			}
+			else {
+				this.logger.error(ex, "Failed to handle " + KafkaUtils.format(record) + " with " + thrownException);
+			}
 			return false;
 		}
 	}
@@ -202,8 +207,10 @@ public class DefaultErrorHandler extends FailedBatchProcessor implements CommonE
 	}
 
 	@Override
-	public void onPartitionsAssigned(Consumer<?, ?> consumer, Collection<TopicPartition> partitions) {
-		getFallbackBatchHandler().onPartitionsAssigned(consumer, partitions);
+	public void onPartitionsAssigned(Consumer<?, ?> consumer, Collection<TopicPartition> partitions,
+			Runnable publishPause) {
+
+		getFallbackBatchHandler().onPartitionsAssigned(consumer, partitions, publishPause);
 	}
 
 }

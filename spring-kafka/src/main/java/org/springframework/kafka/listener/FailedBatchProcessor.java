@@ -35,6 +35,7 @@ import org.apache.kafka.clients.consumer.OffsetCommitCallback;
 import org.apache.kafka.common.TopicPartition;
 
 import org.springframework.kafka.KafkaException;
+import org.springframework.kafka.KafkaException.Level;
 import org.springframework.lang.Nullable;
 import org.springframework.util.backoff.BackOff;
 
@@ -70,16 +71,6 @@ public abstract class FailedBatchProcessor extends FailedRecordProcessor {
 	}
 
 	/**
-	 * Return the fallback batch error handler.
-	 * @return the handler.
-	 * @since 2.8.8
-	 */
-	protected CommonErrorHandler getFallbackBatchHandler() {
-		return this.fallbackBatchHandler;
-	}
-
-
-	/**
 	 * Construct an instance with the provided properties.
 	 * @param recoverer the recoverer.
 	 * @param backOff the back off.
@@ -94,6 +85,31 @@ public abstract class FailedBatchProcessor extends FailedRecordProcessor {
 		this.fallbackBatchHandler = fallbackHandler;
 	}
 
+	@Override
+	public void setRetryListeners(RetryListener... listeners) {
+		super.setRetryListeners(listeners);
+		if (this.fallbackBatchHandler instanceof FallbackBatchErrorHandler handler) {
+			handler.setRetryListeners(listeners);
+		}
+	}
+
+	@Override
+	public void setLogLevel(Level logLevel) {
+		super.setLogLevel(logLevel);
+		if (this.fallbackBatchHandler instanceof KafkaExceptionLogLevelAware handler) {
+			handler.setLogLevel(logLevel);
+		}
+	}
+
+	/**
+	 * Return the fallback batch error handler.
+	 * @return the handler.
+	 * @since 2.8.8
+	 */
+	protected CommonErrorHandler getFallbackBatchHandler() {
+		return this.fallbackBatchHandler;
+	}
+
 	protected void doHandle(Exception thrownException, ConsumerRecords<?, ?> data, Consumer<?, ?> consumer,
 			MessageListenerContainer container, Runnable invokeListener) {
 
@@ -105,23 +121,30 @@ public abstract class FailedBatchProcessor extends FailedRecordProcessor {
 
 		BatchListenerFailedException batchListenerFailedException = getBatchListenerFailedException(thrownException);
 		if (batchListenerFailedException == null) {
-			this.logger.debug(thrownException, "Expected a BatchListenerFailedException; re-seeking batch");
-			this.fallbackBatchHandler.handleBatch(thrownException, data, consumer, container, invokeListener);
+			this.logger.debug(thrownException, "Expected a BatchListenerFailedException; re-delivering full batch");
+			fallback(thrownException, data, consumer, container, invokeListener);
 		}
 		else {
+			getRetryListeners().forEach(listener -> listener.failedDelivery(data, thrownException, 1));
 			ConsumerRecord<?, ?> record = batchListenerFailedException.getRecord();
 			int index = record != null ? findIndex(data, record) : batchListenerFailedException.getIndex();
 			if (index < 0 || index >= data.count()) {
 				this.logger.warn(batchListenerFailedException, () ->
 						String.format("Record not found in batch: %s-%d@%d; re-seeking batch",
 								record.topic(), record.partition(), record.offset()));
-				this.fallbackBatchHandler.handleBatch(thrownException, data, consumer, container, invokeListener);
+				fallback(thrownException, data, consumer, container, invokeListener);
 			}
 			else {
 				return seekOrRecover(thrownException, data, consumer, container, index);
 			}
 		}
 		return ConsumerRecords.empty();
+	}
+
+	private void fallback(Exception thrownException, ConsumerRecords<?, ?> data, Consumer<?, ?> consumer,
+			MessageListenerContainer container, Runnable invokeListener) {
+
+		this.fallbackBatchHandler.handleBatch(thrownException, data, consumer, container, invokeListener);
 	}
 
 	private int findIndex(ConsumerRecords<?, ?> data, ConsumerRecord<?, ?> record) {

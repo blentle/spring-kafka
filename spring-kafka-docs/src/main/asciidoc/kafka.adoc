@@ -238,7 +238,7 @@ public ProducerFactory<Integer, String> producerFactory() {
 public Map<String, Object> producerConfigs() {
     Map<String, Object> props = new HashMap<>();
     props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
-    props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
+    props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, IntegerSerializer.class);
     props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
     // See https://kafka.apache.org/documentation/#producerconfigs for more properties
     return props;
@@ -725,6 +725,9 @@ These header names are used by the `@KafkaListener` infrastructure to route the 
 
 Starting with version 2.3, you can customize the header names - the template has 3 properties `correlationHeaderName`, `replyTopicHeaderName`, and `replyPartitionHeaderName`.
 This is useful if your server is not a Spring application (or does not use the `@KafkaListener`).
+
+NOTE: Conversely, if the requesting application is not a spring application and puts correlation information in a different header, starting with version 3.0, you can configure a custom `correlationHeaderName` on the listener container factory and that header will be echoed back.
+Previously, the listener had to echo custom correlation headers.
 
 [[exchanging-messages]]
 ====== Request/Reply with `Message<?>` s
@@ -2630,7 +2633,7 @@ See <<error-handlers>>.
 |See desc.
 |Deprecated - see `commonErrorHandler`.
 
-|[[groupId]]<<groupId,`groupId`>>
+|[[groupId2]]<<groupId2,`groupId`>>
 |See desc.
 |The `containerProperties.groupId`, if present, otherwise the `group.id` property from the consumer factory.
 
@@ -2697,11 +2700,11 @@ Also see `interceptBeforeTx`.
 |`true`
 |Set to false to suppress adding a suffix to the `client.id` consumer property, when the `concurrency` is only 1.
 
-|[[assignedPartitions]]<<assignedPartitions,`assignedPartitions`>>
+|[[assignedPartitions2]]<<assignedPartitions2,`assignedPartitions`>>
 |(read only)
 |The aggregate of partitions currently assigned to this container's child `KafkaMessageListenerContainer` s (explicitly or not).
 
-|[[assignedPartitionsByClientId]]<<assignedPartitionsByClientId,`assignedPartitionsByClientId`>>
+|[[assignedPartitionsByClientId2]]<<assignedPartitionsByClientId2,`assignedPartitionsByClientId`>>
 |(read only)
 |The partitions currently assigned to this container's child `KafkaMessageListenerContainer` s (explicitly or not), keyed by the child container's consumer's `client.id` property.
 
@@ -2709,7 +2712,7 @@ Also see `interceptBeforeTx`.
 |1
 |The number of child `KafkaMessageListenerContainer` s to manage.
 
-|[[containerPaused]]<<containerPaused,`containerPaused`>>
+|[[containerPaused2]]<<containerPaused2,`containerPaused`>>
 |n/a
 |True if pause has been requested and all child containers' consumer has actually paused.
 
@@ -2717,6 +2720,59 @@ Also see `interceptBeforeTx`.
 |n/a
 |A reference to all child `KafkaMessageListenerContainer` s.
 |===
+
+[[dynamic-containers]]
+==== Dynamically Creating Containers
+
+There are several techniques that can be used to create listener containers at runtime.
+This section explores some of those techniques.
+
+===== MessageListener Implementations
+
+If you implement your own listener directly, you can simply use the container factory to create a raw container for that listener:
+
+.User Listener
+====
+[source, java, role="primary", indent=0]
+.Java
+----
+include::{java-examples}/dynamic/MyListener.java[tag=listener]
+include::{java-examples}/dynamic/Application.java[tag=create]
+----
+[source, kotlin, role="secondary",indent=0]
+.Kotlin
+----
+include::{kotlin-examples}/dynamic/Application.kt[tag=listener]
+include::{kotlin-examples}/dynamic/Application.kt[tag=create]
+----
+====
+
+===== Prototype Beans
+
+Containers for methods annotated with `@KafkaListener` can be created dynamically by declaring the bean as prototype:
+
+.Prototype
+====
+[source, java, role="primary", indent=0]
+.Java
+----
+include::{java-examples}/dynamic/MyPojo.java[tag=pojo]
+include::{java-examples}/dynamic/Application.java[tag=pojoBean]
+include::{java-examples}/dynamic/Application.java[tag=getBeans]
+----
+[source, kotlin, role="secondary",indent=0]
+.Kotlin
+----
+include::{kotlin-examples}/dynamic/Application.kt[tag=pojo]
+include::{kotlin-examples}/dynamic/Application.kt[tag=pojoBean]
+include::{kotlin-examples}/dynamic/Application.kt[tag=getBeans]
+----
+====
+
+IMPORTANT: Listeners must have unique IDs.
+Starting with version 2.8.9, the `KafkaListenerEndpointRegistry` has a new method `unregisterListenerContainer(String id)` to allow you to re-use an id.
+Unregistering a container does not `stop()` the container, you must do that yourself.
+
 [[events]]
 ==== Application Events
 
@@ -3257,7 +3313,6 @@ IMPORTANT: By default, the application context's event multicaster invokes event
 If you change the multicaster to use an async executor, thread cleanup is not effective.
 
 [[micrometer]]
-
 ==== Monitoring
 
 ===== Monitoring Listener Performance
@@ -3344,6 +3399,23 @@ double count = this.meterRegistry.get("kafka.producer.node.incoming.byte.total")
 ====
 
 A similar listener is provided for the `StreamsBuilderFactoryBean` - see <<streams-micrometer>>.
+
+[[observation]]
+===== Micrometer Observation
+
+Using Micrometer for observation is now supported, since version 3.0, for the `KafkaTemplate` and listener containers.
+
+Set `observationEnabled` on each component to enable observation; this will disable <<micrometer,Micrometer Timers>> because the timers will now be managed with each observation.
+
+Refer to https://micrometer.io/docs/tracing[Micrometer Tracing] for more information.
+
+To add tags to timers/traces, configure a custom `KafkaTemplateObservationConvention` or `KafkaListenerObservationConvention` to the template or listener container, respectively.
+
+The default implementations add the `bean.name` tag for template observations and `listener.id` tag for containers.
+
+You can either subclass `DefaultKafkaTemplateObservationConvention` or `DefaultKafkaListenerObservationConvention` or provide completely new implementations.
+
+See <<observation-gen>> for details of the observations that are recorded.
 
 [[transactions]]
 ==== Transactions
@@ -4573,6 +4645,9 @@ void listen(List<ConsumerRecord<String, Thing>> in) {
 ----
 ====
 
+IMPORTANT: If you are also using a `DeadLetterPublishingRecoverer`, the record published for a `DeserializationException` will have a `record.value()` of type `byte[]`; this should not be serialized.
+Consider using a `DelegatingByTypeSerializer` configured to use a `ByteArraySerializer` for `byte[]` and the normal serializer (Json, Avro, etc) for all other types.
+
 [[payload-conversion-with-batch]]
 ===== Payload Conversion with Batch Listeners
 
@@ -5212,6 +5287,7 @@ public DefaultErrorHandler errorHandler(ConsumerRecordRecoverer recoverer) {
 ====
 
 The error handler can be configured with one or more `RetryListener` s, receiving notifications of retry and recovery progress.
+Starting with version 2.8.10, methods for batch listeners were added.
 
 ====
 [source, java]
@@ -5226,6 +5302,15 @@ public interface RetryListener {
 
     default void recoveryFailed(ConsumerRecord<?, ?> record, Exception original, Exception failure) {
     }
+
+	default void failedDelivery(ConsumerRecords<?, ?> records, Exception ex, int deliveryAttempt) {
+	}
+
+	default void recovered(ConsumerRecords<?, ?> records, Exception ex) {
+	}
+
+	default void recoveryFailed(ConsumerRecords<?, ?> records, Exception original, Exception failure) {
+	}
 
 }
 ----

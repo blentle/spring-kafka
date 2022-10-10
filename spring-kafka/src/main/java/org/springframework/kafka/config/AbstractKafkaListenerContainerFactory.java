@@ -108,6 +108,8 @@ public abstract class AbstractKafkaListenerContainerFactory<C extends AbstractMe
 
 	private ContainerCustomizer<K, V, C> containerCustomizer;
 
+	private String correlationHeaderName;
+
 	@Override
 	public void setApplicationContext(ApplicationContext applicationContext) throws BeansException {
 		this.applicationContext = applicationContext;
@@ -213,7 +215,7 @@ public abstract class AbstractKafkaListenerContainerFactory<C extends AbstractMe
 	 * @deprecated in favor of {@link #setCommonErrorHandler(CommonErrorHandler)}
 	 * @see #setCommonErrorHandler(CommonErrorHandler)
 	 */
-	@Deprecated
+	@Deprecated(since = "2.8", forRemoval = true) // in 3.1
 	public void setErrorHandler(org.springframework.kafka.listener.ErrorHandler errorHandler) {
 		this.errorHandler = errorHandler;
 	}
@@ -225,7 +227,7 @@ public abstract class AbstractKafkaListenerContainerFactory<C extends AbstractMe
 	 * @deprecated in favor of {@link #setCommonErrorHandler(CommonErrorHandler)}
 	 * @see #setCommonErrorHandler(CommonErrorHandler)
 	 */
-	@Deprecated
+	@Deprecated(since = "2.8", forRemoval = true) // in 3.1
 	public void setBatchErrorHandler(org.springframework.kafka.listener.BatchErrorHandler errorHandler) {
 		this.errorHandler = errorHandler;
 	}
@@ -321,6 +323,17 @@ public abstract class AbstractKafkaListenerContainerFactory<C extends AbstractMe
 		this.containerCustomizer = containerCustomizer;
 	}
 
+	/**
+	 * Set a custom header name for the correlation id. Default
+	 * {@link org.springframework.kafka.support.KafkaHeaders#CORRELATION_ID}. This header
+	 * will be echoed back in any reply message.
+	 * @param correlationHeaderName the header name.
+	 * @since 3.0
+	 */
+	public void setCorrelationHeaderName(String correlationHeaderName) {
+		this.correlationHeaderName = correlationHeaderName;
+	}
+
 	@SuppressWarnings("deprecation")
 	@Override
 	public void afterPropertiesSet() {
@@ -363,7 +376,8 @@ public abstract class AbstractKafkaListenerContainerFactory<C extends AbstractMe
 				.acceptIfNotNull(this.ackDiscarded, aklEndpoint::setAckDiscarded)
 				.acceptIfNotNull(this.replyTemplate, aklEndpoint::setReplyTemplate)
 				.acceptIfNotNull(this.replyHeadersConfigurer, aklEndpoint::setReplyHeadersConfigurer)
-				.acceptIfNotNull(this.batchToRecordAdapter, aklEndpoint::setBatchToRecordAdapter);
+				.acceptIfNotNull(this.batchToRecordAdapter, aklEndpoint::setBatchToRecordAdapter)
+				.acceptIfNotNull(this.correlationHeaderName, aklEndpoint::setCorrelationHeaderName);
 		if (aklEndpoint.getBatchListener() == null) {
 			JavaUtils.INSTANCE
 					.acceptIfNotNull(this.batchListener, aklEndpoint::setBatchListener);

@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 the original author or authors.
+ * Copyright 2022 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,22 +14,28 @@
  * limitations under the License.
  */
 
-package org.springframework.kafka.core;
+package org.springframework.kafka.support.micrometer;
 
-import org.springframework.kafka.support.SendResult;
-import org.springframework.util.concurrent.ListenableFutureCallback;
+import io.micrometer.observation.Observation.Context;
+import io.micrometer.observation.ObservationConvention;
 
 /**
- * An enhanced {@link ListenableFutureCallback} for reporting
- * {@link KafkaProducerException}s.
- *
- * @param <K> the key type.
- * @param <V> the value type.
+ * {@link ObservationConvention} for Kafka listener key values.
  *
  * @author Gary Russell
- * @since 2.5
+ * @since 3.0
  *
  */
-public interface KafkaSendCallback<K, V> extends ListenableFutureCallback<SendResult<K, V>>, KafkaFailureCallback<K, V> {
+public interface KafkaListenerObservationConvention extends ObservationConvention<KafkaRecordReceiverContext> {
+
+	@Override
+	default boolean supportsContext(Context context) {
+		return context instanceof KafkaRecordReceiverContext;
+	}
+
+	@Override
+	default String getName() {
+		return "spring.kafka.listener";
+	}
 
 }
