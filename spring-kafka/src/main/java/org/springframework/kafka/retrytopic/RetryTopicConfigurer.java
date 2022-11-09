@@ -21,7 +21,6 @@ import java.util.Collection;
 import java.util.function.Consumer;
 
 import org.apache.commons.logging.LogFactory;
-import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 
 import org.springframework.beans.BeansException;
@@ -37,6 +36,7 @@ import org.springframework.kafka.config.MethodKafkaListenerEndpoint;
 import org.springframework.kafka.config.MultiMethodKafkaListenerEndpoint;
 import org.springframework.kafka.support.EndpointHandlerMethod;
 import org.springframework.kafka.support.KafkaUtils;
+import org.springframework.kafka.support.TopicForRetryable;
 import org.springframework.lang.Nullable;
 
 
@@ -138,11 +138,25 @@ import org.springframework.lang.Nullable;
  *
  * <p>The other, non-exclusive way to configure the endpoints is through the convenient
  * {@link org.springframework.kafka.annotation.RetryableTopic} annotation, that can be placed on any
- * {@link org.springframework.kafka.annotation.KafkaListener} annotated methods, such as:
+ * {@link org.springframework.kafka.annotation.KafkaListener} annotated methods, directly, such as:
  *
  * <pre>
  *     <code>@RetryableTopic(attempts = 3,
  *     		backoff = @Backoff(delay = 700, maxDelay = 12000, multiplier = 3))</code>
+ *     <code>@KafkaListener(topics = "my-annotated-topic")
+ *     public void processMessage(MyPojo message) {
+ *        		// ... message processing
+ *     }</code>
+ *</pre>
+ * <p> Or through meta-annotations, such as:
+ * <pre>
+ *     <code>@RetryableTopic(backoff = @Backoff(delay = 700, maxDelay = 12000, multiplier = 3))</code>
+ *     <code>public @interface WithExponentialBackoffRetry {</code>
+ *     <code>   	{@literal @}AliasFor(attribute = "attempts", annotation = RetryableTopic.class)
+ *        	String retries();
+ *     }</code>
+ *
+ *     <code>@WithExponentialBackoffRetry(retries = "3")</code>
  *     <code>@KafkaListener(topics = "my-annotated-topic")
  *     public void processMessage(MyPojo message) {
  *        		// ... message processing
@@ -192,6 +206,8 @@ import org.springframework.lang.Nullable;
  * If no DLT handler is provided, the default {@link LoggingDltListenerHandlerMethod} is used.
  *
  * @author Tomaz Fernandes
+ * @author Fabio da Silva Jr.
+ * @author Gary Russell
  * @since 2.7
  *
  * @see RetryTopicConfigurationBuilder
@@ -282,8 +298,12 @@ public class RetryTopicConfigurer implements BeanFactoryAware {
 											@Nullable KafkaListenerContainerFactory<?> factory,
 											String defaultContainerFactoryBeanName) {
 		throwIfMultiMethodEndpoint(mainEndpoint);
-		DestinationTopicProcessor.Context context =
-				new DestinationTopicProcessor.Context(configuration.getDestinationTopicProperties());
+		String id = mainEndpoint.getId();
+		if (id == null) {
+			id = "no.id.provided";
+		}
+		DestinationTopicProcessor.Context context = new DestinationTopicProcessor.Context(id,
+				configuration.getDestinationTopicProperties());
 		configureEndpoints(mainEndpoint, endpointProcessor, factory, registrar, configuration, context,
 				defaultContainerFactoryBeanName);
 		this.destinationTopicProcessor.processRegisteredDestinations(getTopicCreationFunction(configuration), context);
@@ -321,11 +341,21 @@ public class RetryTopicConfigurer implements BeanFactoryAware {
 						? resolveAndConfigureFactoryForMainEndpoint(factory, defaultFactoryBeanName, configuration)
 						: resolveAndConfigureFactoryForRetryEndpoint(factory, defaultFactoryBeanName, configuration);
 
-		MethodKafkaListenerEndpoint<?, ?> endpoint = destinationTopicProperties.isMainEndpoint()
-				? mainEndpoint
-				: new MethodKafkaListenerEndpoint<>();
+		MethodKafkaListenerEndpoint<?, ?> endpoint;
+		if (destinationTopicProperties.isMainEndpoint()) {
+			endpoint = mainEndpoint;
+		}
+		else {
+			endpoint = new MethodKafkaListenerEndpoint<>();
+			endpoint.setId(mainEndpoint.getId());
+			endpoint.setMainListenerId(mainEndpoint.getId());
+		}
 
 		endpointProcessor.accept(endpoint);
+		Integer concurrency = configuration.getConcurrency();
+		if (!destinationTopicProperties.isMainEndpoint() && concurrency != null) {
+			endpoint.setConcurrency(concurrency);
+		}
 
 		EndpointHandlerMethod endpointBeanMethod =
 				getEndpointHandlerMethod(mainEndpoint, configuration, destinationTopicProperties);
@@ -363,7 +393,7 @@ public class RetryTopicConfigurer implements BeanFactoryAware {
 				String beanName = topic + "-topicRegistrationBean";
 				if (!bf.containsBean(beanName)) {
 					bf.registerSingleton(beanName,
-							new NewTopic(topic, config.getNumPartitions(), config.getReplicationFactor()));
+							new TopicForRetryable(topic, config.getNumPartitions(), config.getReplicationFactor()));
 				}
 			}
 		);

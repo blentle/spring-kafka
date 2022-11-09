@@ -191,9 +191,19 @@ public interface MessageListenerContainer extends SmartLifecycle, DisposableBean
 	 * @return the id or bean name.
 	 * @since 2.2.5
 	 */
-	@Nullable
 	default String getListenerId() {
 		throw new UnsupportedOperationException("This container does not support retrieving the listener id");
+	}
+
+	/**
+	 * The 'id' attribute of the main {@code @KafkaListener} container, if this container
+	 * is for a retry topic; null otherwise.
+	 * @return the id.
+	 * @since 3.0
+	 */
+	@Nullable
+	default String getMainListenerId() {
+		throw new UnsupportedOperationException("This container does not support retrieving the main listener id");
 	}
 
 	/**

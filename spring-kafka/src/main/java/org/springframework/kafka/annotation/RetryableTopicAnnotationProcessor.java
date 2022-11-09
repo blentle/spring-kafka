@@ -129,12 +129,13 @@ public class RetryableTopicAnnotationProcessor {
 		}
 		return RetryTopicConfigurationBuilder.newInstance()
 				.maxAttempts(resolveExpressionAsInteger(annotation.attempts(), "attempts", true))
+				.concurrency(resolveExpressionAsInteger(annotation.concurrency(), "concurrency", false))
 				.customBackoff(createBackoffFromAnnotation(annotation.backoff(), this.beanFactory))
 				.retryTopicSuffix(resolveExpressionAsString(annotation.retryTopicSuffix(), "retryTopicSuffix"))
 				.dltSuffix(resolveExpressionAsString(annotation.dltTopicSuffix(), "dltTopicSuffix"))
 				.dltHandlerMethod(getDltProcessor(method, bean))
 				.includeTopics(Arrays.asList(topics))
-				.listenerFactory(annotation.listenerContainerFactory())
+				.listenerFactory(resolveExpressionAsString(annotation.listenerContainerFactory(), "listenerContainerFactory"))
 				.autoCreateTopics(resolveExpressionAsBoolean(annotation.autoCreateTopics(), "autoCreateTopics"),
 						resolveExpressionAsInteger(annotation.numPartitions(), "numPartitions", true),
 						resolveExpressionAsShort(annotation.replicationFactor(), "replicationFactor", true))
@@ -146,7 +147,7 @@ public class RetryableTopicAnnotationProcessor {
 				.autoStartDltHandler(autoStartDlt)
 				.setTopicSuffixingStrategy(annotation.topicSuffixingStrategy())
 				.timeoutAfter(timeout)
-				.create(getKafkaTemplate(annotation.kafkaTemplate(), topics));
+				.create(getKafkaTemplate(resolveExpressionAsString(annotation.kafkaTemplate(), "kafkaTemplate"), topics));
 	}
 
 	private SleepingBackOffPolicy<?> createBackoffFromAnnotation(Backoff backoff, BeanFactory beanFactory) { // NOSONAR

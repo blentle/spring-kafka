@@ -49,7 +49,6 @@ import org.springframework.kafka.support.JavaUtils;
 import org.springframework.kafka.support.TopicPartitionOffset;
 import org.springframework.kafka.support.converter.MessageConverter;
 import org.springframework.lang.Nullable;
-import org.springframework.retry.RecoveryCallback;
 import org.springframework.util.Assert;
 import org.springframework.util.ObjectUtils;
 
@@ -94,10 +93,6 @@ public abstract class AbstractKafkaListenerEndpoint<K, V>
 
 	private boolean ackDiscarded;
 
-	private RecoveryCallback<? extends Object> recoveryCallback;
-
-	private boolean statefulRetry;
-
 	private Boolean batchListener;
 
 	private KafkaTemplate<?, ?> replyTemplate;
@@ -119,6 +114,9 @@ public abstract class AbstractKafkaListenerEndpoint<K, V>
 	private byte[] listenerInfo;
 
 	private String correlationHeaderName;
+
+	@Nullable
+	private String mainListenerId;
 
 	@Override
 	public void setBeanFactory(BeanFactory beanFactory) throws BeansException {
@@ -150,8 +148,18 @@ public abstract class AbstractKafkaListenerEndpoint<K, V>
 		return this.beanResolver;
 	}
 
-	public void setId(String id) {
+	public void setId(@Nullable String id) {
 		this.id = id;
+	}
+
+	public void setMainListenerId(@Nullable String id) {
+		this.mainListenerId = id;
+	}
+
+	@Override
+	@Nullable
+	public String getMainListenerId() {
+		return this.mainListenerId;
 	}
 
 	@Nullable

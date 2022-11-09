@@ -1,10 +1,13 @@
 buildscript {
-	ext.kotlinVersion = '1.7.0'
+	ext.kotlinVersion = '1.7.20'
 	ext.isCI = System.getenv('GITHUB_ACTION') || System.getenv('bamboo_buildKey')
 	repositories {
 		mavenCentral()
 		gradlePluginPortal()
-		maven { url 'https://repo.spring.io/plugins-release' }
+		maven { url 'https://repo.spring.io/plugins-release-local' }
+		if (version.endsWith('SNAPSHOT')) {
+			maven { url 'https://repo.spring.io/snapshot' }
+		}
 	}
 	dependencies {
 		classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlinVersion"
@@ -60,23 +63,23 @@ ext {
 	awaitilityVersion = '4.2.0'
 	googleJsr305Version = '3.0.2'
 	hamcrestVersion = '2.2'
-	hibernateValidationVersion = '7.0.4.Final'
-	jacksonBomVersion = '2.13.4'
-	jaywayJsonPathVersion = '2.6.0'
+	hibernateValidationVersion = '7.0.5.Final'
+	jacksonBomVersion = '2.14.0'
+	jaywayJsonPathVersion = '2.7.0'
 	junit4Version = '4.13.2'
-	junitJupiterVersion = '5.9.0'
+	junitJupiterVersion = '5.9.1'
 	kafkaVersion = '3.3.1'
-	log4jVersion = '2.18.0'
-	micrometerDocsVersion = "1.0.0-SNAPSHOT"
-	micrometerVersion = '1.10.0-SNAPSHOT'
-	micrometerTracingVersion = '1.0.0-SNAPSHOT'
-	mockitoVersion = '4.5.1'
-	reactorVersion = '2022.0.0-SNAPSHOT'
+	log4jVersion = '2.19.0'
+	micrometerDocsVersion = "1.0.0"
+	micrometerVersion = '1.10.0'
+	micrometerTracingVersion = '1.0.0'
+	mockitoVersion = '4.8.0'
+	reactorVersion = '2022.0.0-RC1'
 	scalaVersion = '2.13'
-	springBootVersion = '2.6.11' // docs module
-	springDataVersion = '2022.0.0-SNAPSHOT'
-	springRetryVersion = '2.0.0-SNAPSHOT'
-	springVersion = '6.0.0-SNAPSHOT'
+	springBootVersion = '2.6.12' // docs module
+	springDataVersion = '2022.0.0-RC1'
+	springRetryVersion = '2.0.0-RC1'
+	springVersion = '6.0.0-RC3'
 	zookeeperVersion = '3.6.3'
 
 	idPrefix = 'kafka'
@@ -309,10 +312,6 @@ subprojects { subproject ->
 project ('spring-kafka') {
 	description = 'Spring Kafka Support'
 
-	configurations {
-		adoc
-	}
-
 	dependencies {
 		api 'org.springframework:spring-context'
 		api 'org.springframework:spring-messaging'
@@ -353,34 +352,7 @@ project ('spring-kafka') {
 		testImplementation 'io.micrometer:micrometer-tracing-test'
 		testImplementation 'io.micrometer:micrometer-tracing-integration-test'
 
-		adoc "io.micrometer:micrometer-docs-generator-spans:$micrometerDocsVersion"
-		adoc "io.micrometer:micrometer-docs-generator-metrics:$micrometerDocsVersion"
 	}
-
-	def inputDir = file('src/main/java/org/springframework/kafka/support/micrometer').absolutePath
-	def outputDir = rootProject.file('spring-kafka-docs/src/main/asciidoc').absolutePath
-
-	task generateObservabilityMetricsDocs(type: JavaExec) {
-		onlyIf { !isCI }
-		mainClass = 'io.micrometer.docs.metrics.DocsFromSources'
-		inputs.dir(inputDir)
-		outputs.dir(outputDir)
-		classpath configurations.adoc
-		args inputDir, '.*', outputDir
-	}
-
-	task generateObservabilitySpansDocs(type: JavaExec) {
-		onlyIf { !isCI }
-		mainClass = 'io.micrometer.docs.spans.DocsFromSources'
-		inputs.dir(inputDir)
-		outputs.dir(outputDir)
-		classpath configurations.adoc
-		args inputDir, '.*', outputDir
-	}
-
-	// javadoc {
-	// 	finalizedBy generateObservabilityMetricsDocs, generateObservabilitySpansDocs
-	// }
 
 }
 
@@ -449,10 +421,12 @@ sonarqube {
 
 configurations {
 	asciidoctorExtensions
+	micrometerDocs
 }
 
 dependencies {
 	asciidoctorExtensions "io.spring.asciidoctor.backends:spring-asciidoctor-backends:${springAsciidoctorBackendsVersion}"
+	micrometerDocs "io.micrometer:micrometer-docs-generator:$micrometerDocsVersion"
 }
 
 task prepareAsciidocBuild(type: Sync) {
@@ -462,8 +436,28 @@ task prepareAsciidocBuild(type: Sync) {
 	into "$buildDir/asciidoc"
 }
 
+def observationInputDir = file('spring-kafka/src/main/java/org/springframework/kafka/support/micrometer').absolutePath
+def generatedDocsDir = file("$buildDir/docs/generated").absolutePath
+
+task generateObservabilityDocs(type: JavaExec) {
+	mainClass = 'io.micrometer.docs.DocsGeneratorCommand'
+	inputs.dir(observationInputDir)
+	outputs.dir(generatedDocsDir)
+	classpath configurations.micrometerDocs
+	args observationInputDir, /.+/, generatedDocsDir
+}
+
+task filterMetricsDocsContent(type: Copy) {
+	dependsOn generateObservabilityDocs
+	from generatedDocsDir
+	include '_*.adoc'
+	into generatedDocsDir
+	rename { filename -> filename.replace '_', '' }
+	filter { line -> line.replaceAll('org.springframework.kafka.support.micrometer.', '').replaceAll('^Fully qualified n', 'N') }
+}
+
 asciidoctorPdf {
-	dependsOn prepareAsciidocBuild
+	dependsOn prepareAsciidocBuild, filterMetricsDocsContent
 	baseDirFollowsSourceFile()
 	configurations 'asciidoctorExt'
 

@@ -68,6 +68,7 @@ import org.springframework.util.backoff.FixedBackOff;
 
 /**
  * @author Tomaz Fernandes
+ * @author Gary Russell
  * @since 2.7
  */
 @ExtendWith(MockitoExtension.class)
@@ -154,13 +155,15 @@ class ListenerContainerFactoryConfigurerTests {
 	void shouldSetupErrorHandling() {
 
 		// given
+		String testListenerId = "testListenerId";
 		given(container.getContainerProperties()).willReturn(containerProperties);
-		given(deadLetterPublishingRecovererFactory.create()).willReturn(recoverer);
+		given(deadLetterPublishingRecovererFactory.create("testListenerId")).willReturn(recoverer);
 		given(containerProperties.getAckMode()).willReturn(ContainerProperties.AckMode.MANUAL_IMMEDIATE);
 		given(containerProperties.getCommitCallback()).willReturn(offsetCommitCallback);
 		given(containerProperties.getMessageListener()).willReturn(listener);
 		given(configuration.forContainerFactoryConfigurer()).willReturn(lcfcConfiguration);
 		willReturn(container).given(containerFactory).createListenerContainer(endpoint);
+		given(container.getListenerId()).willReturn(testListenerId);
 
 		// when
 		ListenerContainerFactoryConfigurer configurer =
@@ -188,13 +191,13 @@ class ListenerContainerFactoryConfigurerTests {
 	void shouldSetupMessageListenerAdapter() {
 
 		// given
+		String testListenerId = "testListenerId";
 		given(container.getContainerProperties()).willReturn(containerProperties);
-		given(deadLetterPublishingRecovererFactory.create()).willReturn(recoverer);
+		given(deadLetterPublishingRecovererFactory.create(testListenerId)).willReturn(recoverer);
 		given(containerProperties.getMessageListener()).willReturn(listener);
 		RecordHeaders headers = new RecordHeaders();
 		headers.add(RetryTopicHeaders.DEFAULT_HEADER_BACKOFF_TIMESTAMP, originalTimestampBytes);
 		given(data.headers()).willReturn(headers);
-		String testListenerId = "testListenerId";
 		given(container.getListenerId()).willReturn(testListenerId);
 		given(configuration.forContainerFactoryConfigurer()).willReturn(lcfcConfiguration);
 		willReturn(container).given(containerFactory).createListenerContainer(endpoint);
@@ -226,13 +229,13 @@ class ListenerContainerFactoryConfigurerTests {
 	void shouldDecorateFactory() {
 
 		// given
+		String testListenerId = "testListenerId";
 		given(container.getContainerProperties()).willReturn(containerProperties);
-		given(deadLetterPublishingRecovererFactory.create()).willReturn(recoverer);
+		given(deadLetterPublishingRecovererFactory.create(testListenerId)).willReturn(recoverer);
 		given(containerProperties.getMessageListener()).willReturn(listener);
 		RecordHeaders headers = new RecordHeaders();
 		headers.add(RetryTopicHeaders.DEFAULT_HEADER_BACKOFF_TIMESTAMP, originalTimestampBytes);
 		given(data.headers()).willReturn(headers);
-		String testListenerId = "testListenerId";
 		given(container.getListenerId()).willReturn(testListenerId);
 		given(configuration.forContainerFactoryConfigurer()).willReturn(lcfcConfiguration);
 		willReturn(container).given(containerFactory).createListenerContainer(endpoint);
@@ -263,11 +266,13 @@ class ListenerContainerFactoryConfigurerTests {
 	void shouldUseGivenBackOffAndExceptions() {
 
 		// given
+		String testListenerId = "testListenerId";
 		given(container.getContainerProperties()).willReturn(containerProperties);
-		given(deadLetterPublishingRecovererFactory.create()).willReturn(recoverer);
+		given(deadLetterPublishingRecovererFactory.create(testListenerId)).willReturn(recoverer);
 		given(containerProperties.getMessageListener()).willReturn(listener);
 		given(configuration.forContainerFactoryConfigurer()).willReturn(lcfcConfiguration);
 		willReturn(container).given(containerFactory).createListenerContainer(endpoint);
+		given(container.getListenerId()).willReturn(testListenerId);
 		BackOff backOffMock = mock(BackOff.class);
 		BackOffExecution backOffExecutionMock = mock(BackOffExecution.class);
 		given(backOffMock.start()).willReturn(backOffExecutionMock);
@@ -295,6 +300,44 @@ class ListenerContainerFactoryConfigurerTests {
 
 	}
 
+	@Test
+	void shouldUseGivenBackOffAndExceptionsKeepStandard() {
+
+		// given
+		String testListenerId = "testListenerId";
+		given(container.getContainerProperties()).willReturn(containerProperties);
+		given(deadLetterPublishingRecovererFactory.create(testListenerId)).willReturn(recoverer);
+		given(containerProperties.getMessageListener()).willReturn(listener);
+		given(configuration.forContainerFactoryConfigurer()).willReturn(lcfcConfiguration);
+		willReturn(container).given(containerFactory).createListenerContainer(endpoint);
+		given(container.getListenerId()).willReturn(testListenerId);
+		BackOff backOffMock = mock(BackOff.class);
+		BackOffExecution backOffExecutionMock = mock(BackOffExecution.class);
+		given(backOffMock.start()).willReturn(backOffExecutionMock);
+
+		ListenerContainerFactoryConfigurer configurer =
+				new ListenerContainerFactoryConfigurer(kafkaConsumerBackoffManager,
+						deadLetterPublishingRecovererFactory, clock);
+		configurer.setBlockingRetriesBackOff(backOffMock);
+		configurer.setBlockingRetryableExceptions(IllegalArgumentException.class, IllegalStateException.class);
+		configurer.setRetainStandardFatal(true);
+
+		// when
+		KafkaListenerContainerFactory<?> decoratedFactory =
+				configurer.decorateFactory(this.containerFactory, configuration.forContainerFactoryConfigurer());
+		decoratedFactory.createListenerContainer(endpoint);
+
+		// then
+		then(backOffMock).should().start();
+		then(container).should().setCommonErrorHandler(errorHandlerCaptor.capture());
+		CommonErrorHandler errorHandler = errorHandlerCaptor.getValue();
+		assertThat(DefaultErrorHandler.class.isAssignableFrom(errorHandler.getClass())).isTrue();
+		DefaultErrorHandler defaultErrorHandler = (DefaultErrorHandler) errorHandler;
+		assertThat(defaultErrorHandler.removeClassification(IllegalArgumentException.class)).isTrue();
+		assertThat(defaultErrorHandler.removeClassification(IllegalStateException.class)).isTrue();
+		assertThat(defaultErrorHandler.removeClassification(ConversionException.class)).isFalse();
+
+	}
 
 	@Test
 	void shouldThrowIfBackOffOrRetryablesAlreadySet() {

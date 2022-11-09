@@ -1,5 +1,5 @@
 /*
- * Copyright 2018-2021 the original author or authors.
+ * Copyright 2018-2022 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -37,11 +37,12 @@ import org.springframework.retry.annotation.Backoff;
  *
  * @author Tomaz Fernandes
  * @author Gary Russell
+ * @author Fabio da Silva Jr.
  * @since 2.7
  *
  * @see org.springframework.kafka.retrytopic.RetryTopicConfigurer
  */
-@Target({ ElementType.METHOD })
+@Target({ ElementType.METHOD, ElementType.ANNOTATION_TYPE })
 @Retention(RetentionPolicy.RUNTIME)
 @Documented
 public @interface RetryableTopic {
@@ -192,5 +193,13 @@ public @interface RetryableTopic {
 	 * @since 2.8
 	 */
 	String autoStartDltHandler() default "";
+
+	/**
+	 * Concurrency for the retry and DLT containers; if not specified, the main container
+	 * concurrency is used.
+	 * @return the concurrency.
+	 * @since 3.0
+	 */
+	String concurrency() default "";
 
 }

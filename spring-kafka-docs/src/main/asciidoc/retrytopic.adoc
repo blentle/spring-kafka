@@ -1,13 +1,7 @@
 [[retry-topic]]
 === Non-Blocking Retries
 
-IMPORTANT: This is an experimental feature and the usual rule of no breaking API changes does not apply to this feature until the experimental designation is removed.
-Users are encouraged to try out the feature and provide feedback via GitHub Issues or GitHub discussions.
-This is regarding the API only; the feature is considered to be complete, and robust.
-
 Version 2.9 changed the mechanism to bootstrap infrastructure beans; see <<retry-config>> for the two mechanisms that are now required to bootstrap the feature.
-
-After these changes, we are intending to remove the experimental designation, probably in version 3.0.
 
 Achieving non-blocking retry / dlt functionality with Kafka usually requires setting up extra topics and creating and configuring the corresponding listeners.
 Since 2.7 Spring for Apache Kafka offers support for that via the `@RetryableTopic` annotation and `RetryTopicConfiguration` class to simplify that bootstrapping.
@@ -52,6 +46,9 @@ NOTE: It is not necessary to also add `@EnableKafka`, if you add this annotation
 Also, starting with that version, for more advanced configuration of the feature's components and global features, the `RetryTopicConfigurationSupport` class should be extended in a `@Configuration` class, and the appropriate methods overridden.
 For more details refer to <<retry-topic-global-settings>>.
 
+By default, the containers for the retry topics will have the same concurrency as the main container.
+Starting with version 3.0, you can set a different `concurrency` for the retry containers (either on the annotation, or in `RetryConfigurationBuilder`).
+
 IMPORTANT: Only one of the above techniques can be used, and only one `@Configuration` class can extend `RetryTopicConfigurationSupport`.
 
 ===== Using the `@RetryableTopic` annotation
@@ -85,6 +82,23 @@ public void processMessage(MyPojo message) {
 NOTE: If you don't specify a kafkaTemplate name a bean with name `defaultRetryTopicKafkaTemplate` will be looked up.
 If no bean is found an exception is thrown.
 
+Starting with version 3.0, the `@RetryableTopic` annotation can be used as a meta-annotation on custom annotations; for example:
+
+====
+[source, java]
+----
+@Target({ElementType.METHOD})
+@Retention(RetentionPolicy.RUNTIME)
+@RetryableTopic
+static @interface MetaAnnotatedRetryableTopic {
+
+    @AliasFor(attribute = "concurrency", annotation = RetryableTopic.class)
+    String parallelism() default "3";
+
+}
+----
+====
+
 ===== Using `RetryTopicConfiguration` beans
 
 You can also configure the non-blocking retry support by creating `RetryTopicConfiguration` beans in a `@Configuration` annotated class.
@@ -114,6 +128,7 @@ public RetryTopicConfiguration myRetryTopic(KafkaTemplate<String, MyPojo> templa
             .newInstance()
             .fixedBackoff(3000)
             .maxAttempts(5)
+            .concurrency(1)
             .includeTopics("my-topic", "my-other-topic")
             .create(template);
 }
@@ -199,6 +214,123 @@ public class MyRetryTopicConfiguration extends RetryTopicConfigurationSupport {
 
 IMPORTANT: When using this configuration approach, the `@EnableKafkaRetryTopic` annotation should not be used to prevent context failing to start due to duplicated beans.
 Use the simple `@EnableKafka` annotation instead.
+
+When `autoCreateTopics` is true, the main and retry topics will be created with the specified number of partitions and replication factor.
+To override these values for a particular topic (e.g. the main topic or DLT), simply add a `NewTopic` `@Bean` with the required properties; that will override the auto creation properties.
+
+IMPORTANT: By default, records are published to the retry topic(s) using the original partition of the received record.
+If the retry topics have fewer partitions than the main topic, you should configure the framework appropriately; an example follows.
+
+====
+[source, java]
+----
+@EnableKafka
+@Configuration
+public class Config extends RetryTopicConfigurationSupport {
+
+    @Override
+    protected Consumer<DeadLetterPublishingRecovererFactory> configureDeadLetterPublishingContainerFactory() {
+        return dlprf -> dlprf.setPartitionResolver((cr, nextTopic) -> null);
+    }
+
+    ...
+
+}
+----
+====
+
+The parameters to the function are the consumer record and the name of the next topic.
+You can return a specific partition number, or `null` to indicate that the `KafkaProducer` should determine the partition.
+
+==== Programmatic Construction
+
+The feature is designed to be used with `@KafkaListener`; however, several users have requested information on how to configure non-blocking retries programmatically.
+The following Spring Boot application provides an example of how to do so.
+
+====
+[source, java]
+----
+@SpringBootApplication
+public class Application extends RetryTopicConfigurationSupport {
+
+    public static void main(String[] args) {
+        SpringApplication.run(2Application.class, args);
+    }
+
+    @Bean
+    RetryTopicConfiguration retryConfig(KafkaTemplate<String, String> template) {
+        return RetryTopicConfigurationBuilder.newInstance()
+                .maxAttempts(4)
+                .autoCreateTopicsWith(2, (short) 1)
+                .create(template);
+    }
+
+    @Bean
+    TaskScheduler scheduler() {
+        return new ThreadPoolTaskScheduler();
+    }
+
+    @Bean
+    @Order(0)
+    SmartInitializingSingleton dynamicRetry(RetryTopicConfigurer configurer, RetryTopicConfiguration config,
+            KafkaListenerAnnotationBeanPostProcessor<?, ?> bpp, KafkaListenerContainerFactory<?> factory,
+            Listener listener, KafkaListenerEndpointRegistry registry) {
+
+        return () -> {
+            KafkaListenerEndpointRegistrar registrar = bpp.getEndpointRegistrar();
+            MethodKafkaListenerEndpoint<String, String> mainEndpoint = new MethodKafkaListenerEndpoint<>();
+            EndpointProcessor endpointProcessor = endpoint -> {
+                // customize as needed (e.g. apply attributes to retry endpoints).
+                if (!endpoint.equals(mainEndpoint)) {
+                    endpoint.setConcurrency(1);
+                }
+                // these are required
+                endpoint.setMessageHandlerMethodFactory(bpp.getMessageHandlerMethodFactory());
+                endpoint.setTopics("topic");
+                endpoint.setId("id");
+                endpoint.setGroupId("group");
+            };
+            mainEndpoint.setBean(listener);
+            try {
+                mainEndpoint.setMethod(Listener.class.getDeclaredMethod("onMessage", ConsumerRecord.class));
+            }
+            catch (NoSuchMethodException | SecurityException ex) {
+                throw new IllegalStateException(ex);
+            }
+            mainEndpoint.setConcurrency(2);
+            mainEndpoint.setTopics("topic");
+            mainEndpoint.setId("id");
+            mainEndpoint.setGroupId("group");
+            configurer.processMainAndRetryListeners(endpointProcessor, mainEndpoint, config, registrar, factory,
+                    "kafkaListenerContainerFactory");
+        };
+    }
+
+
+    @Bean
+    ApplicationRunner runner(KafkaTemplate<String, String> template) {
+        return args -> {
+            template.send("topic", "test");
+        };
+    }
+
+}
+
+@Component
+class Listener implements MessageListener<String, String> {
+
+    @Override
+    public void onMessage(ConsumerRecord<String, String> record) {
+        System.out.println(KafkaUtils.format(record));
+        throw new RuntimeException("test");
+    }
+
+}
+----
+====
+
+IMPORTANT: Auto creation of topics will only occur if the configuration is processed before the application context is refreshed, as in the above example.
+To configure containers at runtime, the topics will need to be created using some other technique.
 
 ==== Features
 
@@ -659,6 +791,37 @@ public class CustomRetryTopicNamesProviderFactory implements RetryTopicNamesProv
 }
 ----
 ====
+
+[[multi-retry]]
+==== Multiple Listeners, Same Topic(s)
+
+Starting with version 3.0, it is now possible to configure multiple listeners on the same topic(s).
+In order to do this, you must use custom topic naming to isolate the retry topics from each other.
+This is best shown with an example:
+
+====
+[source, java]
+----
+@RetryableTopic(...
+        retryTopicSuffix = "-listener1", dltTopicSuffix = "-listener1-dlt",
+        topicSuffixingStrategy = TopicSuffixingStrategy.SUFFIX_WITH_INDEX_VALUE)
+@KafkaListener(id = "listener1", groupId = "group1", topics = TWO_LISTENERS_TOPIC, ...)
+void listen1(String message, @Header(KafkaHeaders.RECEIVED_TOPIC) String receivedTopic) {
+    ...
+}
+
+@RetryableTopic(...
+        retryTopicSuffix = "-listener2", dltTopicSuffix = "-listener2-dlt",
+        topicSuffixingStrategy = TopicSuffixingStrategy.SUFFIX_WITH_INDEX_VALUE)
+@KafkaListener(id = "listener2", groupId = "group2", topics = TWO_LISTENERS_TOPIC, ...)
+void listen2(String message, @Header(KafkaHeaders.RECEIVED_TOPIC) String receivedTopic) {
+    ...
+}
+----
+====
+
+The `topicSuffixingStrategy` is optional.
+The framework will configure and use a separate set of retry topics for each listener.
 
 ==== Dlt Strategies
 

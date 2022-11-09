@@ -35,6 +35,7 @@ import org.springframework.kafka.listener.KafkaConsumerBackoffManager;
 import org.springframework.kafka.listener.MessageListener;
 import org.springframework.kafka.listener.adapter.KafkaBackoffAwareMessageListenerAdapter;
 import org.springframework.kafka.support.TopicPartitionOffset;
+import org.springframework.lang.Nullable;
 import org.springframework.util.Assert;
 import org.springframework.util.backoff.BackOff;
 
@@ -53,14 +54,19 @@ import org.springframework.util.backoff.BackOff;
  * non-retryable endpoints.
  *
  * @author Tomaz Fernandes
+ * @author Gary Russell
  * @since 2.7
  *
  */
 public class ListenerContainerFactoryConfigurer {
 
-	private BackOff providedBlockingBackOff = null;
+	@Nullable
+	private BackOff providedBlockingBackOff;
 
-	private Class<? extends Exception>[] blockingExceptionTypes = null;
+	@Nullable
+	private Class<? extends Exception>[] blockingExceptionTypes;
+
+	private boolean retainStandardFatal;
 
 	private Consumer<ConcurrentMessageListenerContainer<?, ?>> containerCustomizer = container -> {
 	};
@@ -141,6 +147,16 @@ public class ListenerContainerFactoryConfigurer {
 		this.blockingExceptionTypes = Arrays.copyOf(exceptionTypes, exceptionTypes.length);
 	}
 
+	/**
+	 * Set to true to retain standard fatal exceptions as not retryable when configuring
+	 * blocking retries.
+	 * @param retainStandardFatal true to retain standard fatal exceptions.
+	 * @since 3.0
+	 */
+	public void setRetainStandardFatal(boolean retainStandardFatal) {
+		this.retainStandardFatal = retainStandardFatal;
+	}
+
 	public void setContainerCustomizer(Consumer<ConcurrentMessageListenerContainer<?, ?>> containerCustomizer) {
 		Assert.notNull(containerCustomizer, "'containerCustomizer' cannot be null");
 		this.containerCustomizer = containerCustomizer;
@@ -153,7 +169,7 @@ public class ListenerContainerFactoryConfigurer {
 	protected CommonErrorHandler createErrorHandler(DeadLetterPublishingRecoverer deadLetterPublishingRecoverer,
 												Configuration configuration) {
 		DefaultErrorHandler errorHandler = createDefaultErrorHandlerInstance(deadLetterPublishingRecoverer);
-		errorHandler.defaultFalse();
+		errorHandler.defaultFalse(this.retainStandardFatal);
 		errorHandler.setCommitRecovered(true);
 		errorHandler.setLogLevel(KafkaException.Level.DEBUG);
 		if (this.blockingExceptionTypes != null) {
@@ -192,12 +208,14 @@ public class ListenerContainerFactoryConfigurer {
 			implements KafkaListenerContainerFactory<ConcurrentMessageListenerContainer<?, ?>> {
 
 		private final ConcurrentKafkaListenerContainerFactory<?, ?> delegate;
+
 		private final Configuration configuration;
+
 		private final boolean isSetContainerProperties;
 
 		RetryTopicListenerContainerFactoryDecorator(ConcurrentKafkaListenerContainerFactory<?, ?> delegate,
-														Configuration configuration,
-														boolean isSetContainerProperties) {
+				Configuration configuration, boolean isSetContainerProperties) {
+
 			this.delegate = delegate;
 			this.configuration = configuration;
 			this.isSetContainerProperties = isSetContainerProperties;
@@ -208,12 +226,20 @@ public class ListenerContainerFactoryConfigurer {
 			return decorate(this.delegate.createListenerContainer(endpoint));
 		}
 
-		private ConcurrentMessageListenerContainer<?, ?> decorate(ConcurrentMessageListenerContainer<?, ?> listenerContainer) {
+		private ConcurrentMessageListenerContainer<?, ?> decorate(
+				ConcurrentMessageListenerContainer<?, ?> listenerContainer) {
+
+			String mainListenerId = listenerContainer.getMainListenerId();
+			if (mainListenerId == null) {
+				mainListenerId = listenerContainer.getListenerId();
+			}
 			listenerContainer
 					.setCommonErrorHandler(createErrorHandler(
-							ListenerContainerFactoryConfigurer.this.deadLetterPublishingRecovererFactory.create(),
+							ListenerContainerFactoryConfigurer.this.deadLetterPublishingRecovererFactory
+									.create(mainListenerId),
 							this.configuration));
-			setupBackoffAwareMessageListenerAdapter(listenerContainer, this.configuration, this.isSetContainerProperties);
+			setupBackoffAwareMessageListenerAdapter(listenerContainer, this.configuration,
+					this.isSetContainerProperties);
 			return listenerContainer;
 		}
 

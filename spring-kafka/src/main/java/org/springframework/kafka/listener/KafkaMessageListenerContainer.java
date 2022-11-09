@@ -371,7 +371,10 @@ public class KafkaMessageListenerContainer<K, V> // NOSONAR line count
 		if (applicationContext != null && containerProperties.isObservationEnabled()) {
 			ObjectProvider<ObservationRegistry> registry =
 					applicationContext.getBeanProvider(ObservationRegistry.class);
-			observationRegistry = registry.getIfUnique();
+			ObservationRegistry reg = registry.getIfUnique();
+			if (reg != null) {
+				observationRegistry = reg;
+			}
 		}
 		this.listenerConsumer = new ListenerConsumer(listener, listenerType, observationRegistry);
 		setRunning(true);
@@ -614,7 +617,7 @@ public class KafkaMessageListenerContainer<K, V> // NOSONAR line count
 				: new LoggingCommitCallback();
 
 		private final OffsetAndMetadataProvider offsetAndMetadataProvider = this.containerProperties.getOffsetAndMetadataProvider() == null
-				?  (listenerMetadata, offset) -> new OffsetAndMetadata(offset)
+				?  (metadata, offset) -> new OffsetAndMetadata(offset)
 				: this.containerProperties.getOffsetAndMetadataProvider();
 
 		private final ListenerMetadata listenerMetadata = new DefaultListenerMetadata(KafkaMessageListenerContainer.this);
@@ -916,21 +919,22 @@ public class KafkaMessageListenerContainer<K, V> // NOSONAR line count
 			this.lastAlertPartition = new HashMap<>();
 			this.wasIdlePartition = new HashMap<>();
 			this.kafkaAdmin = obtainAdmin();
-			obtainClusterId();
 		}
 
 		@Nullable
 		private KafkaAdmin obtainAdmin() {
-			ApplicationContext applicationContext = getApplicationContext();
-			if (applicationContext != null) {
-				return applicationContext.getBeanProvider(KafkaAdmin.class).getIfUnique();
+			if (this.containerProperties.isObservationEnabled()) {
+				ApplicationContext applicationContext = getApplicationContext();
+				if (applicationContext != null) {
+					return applicationContext.getBeanProvider(KafkaAdmin.class).getIfUnique();
+				}
 			}
 			return null;
 		}
 
 		@Nullable
 		private String clusterId() {
-			if (this.clusterId == null && this.kafkaAdmin != null) {
+			if (this.kafkaAdmin != null && this.clusterId == null) {
 				obtainClusterId();
 			}
 			return this.clusterId;
@@ -1326,14 +1330,7 @@ public class KafkaMessageListenerContainer<K, V> // NOSONAR line count
 
 		@Override // NOSONAR complexity
 		public void run() {
-			publishConsumerStartingEvent();
-			this.consumerThread = Thread.currentThread();
-			setupSeeks();
-			KafkaUtils.setConsumerGroupId(this.consumerGroupId);
-			this.count = 0;
-			this.last = System.currentTimeMillis();
-			initAssignedPartitions();
-			publishConsumerStartedEvent();
+			initialize();
 			Throwable exitThrowable = null;
 			boolean failedAuthRetry = false;
 			while (isRunning()) {
@@ -1397,6 +1394,17 @@ public class KafkaMessageListenerContainer<K, V> // NOSONAR line count
 				}
 			}
 			wrapUp(exitThrowable);
+		}
+
+		protected void initialize() {
+			publishConsumerStartingEvent();
+			this.consumerThread = Thread.currentThread();
+			setupSeeks();
+			KafkaUtils.setConsumerGroupId(this.consumerGroupId);
+			this.count = 0;
+			this.last = System.currentTimeMillis();
+			initAssignedPartitions();
+			publishConsumerStartedEvent();
 		}
 
 		private void setupSeeks() {
@@ -3381,14 +3389,10 @@ public class KafkaMessageListenerContainer<K, V> // NOSONAR line count
 			public void nack(Duration sleep) {
 				Assert.state(Thread.currentThread().equals(ListenerConsumer.this.consumerThread),
 						"nack() can only be called on the consumer thread");
+				Assert.state(!ListenerConsumer.this.containerProperties.isAsyncAcks(),
+						"nack() is not supported with out-of-order commits (asyncAcks=true)");
 				Assert.isTrue(!sleep.isNegative(), "sleep cannot be negative");
 				ListenerConsumer.this.nackSleepDurationMillis = sleep.toMillis();
-				synchronized (ListenerConsumer.this) {
-					if (ListenerConsumer.this.offsetsInThisBatch != null) {
-						ListenerConsumer.this.offsetsInThisBatch.forEach((part, recs) -> recs.clear());
-						ListenerConsumer.this.deferredOffsets.forEach((part, recs) -> recs.clear());
-					}
-				}
 			}
 
 			@Override
@@ -3428,16 +3432,12 @@ public class KafkaMessageListenerContainer<K, V> // NOSONAR line count
 			public void nack(int index, Duration sleep) {
 				Assert.state(Thread.currentThread().equals(ListenerConsumer.this.consumerThread),
 						"nack() can only be called on the consumer thread");
+				Assert.state(!ListenerConsumer.this.containerProperties.isAsyncAcks(),
+						"nack() is not supported with out-of-order commits (asyncAcks=true)");
 				Assert.isTrue(!sleep.isNegative(), "sleep cannot be negative");
 				Assert.isTrue(index >= 0 && index < this.records.count(), "index out of bounds");
 				ListenerConsumer.this.nackIndex = index;
 				ListenerConsumer.this.nackSleepDurationMillis = sleep.toMillis();
-				synchronized (ListenerConsumer.this) {
-					if (ListenerConsumer.this.offsetsInThisBatch != null) {
-						ListenerConsumer.this.offsetsInThisBatch.forEach((part, recs) -> recs.clear());
-						ListenerConsumer.this.deferredOffsets.forEach((part, recs) -> recs.clear());
-					}
-				}
 				int i = 0;
 				List<ConsumerRecord<K, V>> toAck = new LinkedList<>();
 				for (ConsumerRecord<K, V> record : this.records) {
