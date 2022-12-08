@@ -18,24 +18,30 @@ package org.springframework.kafka.retrytopic;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
+import static org.mockito.BDDMockito.willAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
 
-import java.lang.reflect.Field;
 import java.time.Clock;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
+import org.springframework.beans.DirectFieldAccessor;
 import org.springframework.beans.factory.BeanFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationContext;
+import org.springframework.core.log.LogAccessor;
 import org.springframework.kafka.listener.ConcurrentMessageListenerContainer;
 import org.springframework.kafka.listener.ContainerPartitionPausingBackOffManagerFactory;
 import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
@@ -43,6 +49,7 @@ import org.springframework.kafka.listener.DefaultErrorHandler;
 import org.springframework.kafka.listener.KafkaConsumerBackoffManager;
 import org.springframework.kafka.listener.ListenerContainerRegistry;
 import org.springframework.kafka.support.converter.ConversionException;
+import org.springframework.kafka.test.utils.KafkaTestUtils;
 import org.springframework.scheduling.TaskScheduler;
 import org.springframework.util.backoff.BackOff;
 
@@ -52,13 +59,6 @@ import org.springframework.util.backoff.BackOff;
  * @since 2.9
  */
 class RetryTopicConfigurationSupportTests {
-
-	@BeforeEach
-	void reset() throws Exception { // NOSONAR
-		Field field = RetryTopicConfigurationSupport.class.getDeclaredField("ONLY_ONE_ALLOWED");
-		field.setAccessible(true);
-		((AtomicBoolean) field.get(null)).set(true);
-	}
 
 	@SuppressWarnings("unchecked")
 	@Test
@@ -128,7 +128,14 @@ class RetryTopicConfigurationSupportTests {
 			}
 		};
 
-		RetryTopicConfigurer retryTopicConfigurer = support.retryTopicConfigurer(backoffManager, resolver, beanFactory);
+		@SuppressWarnings("unchecked")
+		ObjectProvider<RetryTopicComponentFactory> prov = mock(ObjectProvider.class);
+		willAnswer(inv -> {
+			Supplier<RetryTopicComponentFactory> sup = inv.getArgument(0);
+			return sup.get();
+		}).given(prov).getIfUnique(any());
+		RetryTopicConfigurer retryTopicConfigurer = support.retryTopicConfigurer(backoffManager, resolver,
+				prov, beanFactory);
 		assertThat(retryTopicConfigurer).isNotNull();
 
 		then(componentFactory).should().destinationTopicProcessor(resolver);
@@ -156,7 +163,14 @@ class RetryTopicConfigurationSupportTests {
 		DestinationTopicResolver resolver = mock(DestinationTopicResolver.class);
 		BeanFactory beanFactory = mock(BeanFactory.class);
 		RetryTopicConfigurationSupport support = new RetryTopicConfigurationSupport();
-		RetryTopicConfigurer retryTopicConfigurer = support.retryTopicConfigurer(backoffManager, resolver, beanFactory);
+		@SuppressWarnings("unchecked")
+		ObjectProvider<RetryTopicComponentFactory> prov = mock(ObjectProvider.class);
+		willAnswer(inv -> {
+			Supplier<RetryTopicComponentFactory> sup = inv.getArgument(0);
+			return sup.get();
+		}).given(prov).getIfUnique(any());
+		RetryTopicConfigurer retryTopicConfigurer = support.retryTopicConfigurer(backoffManager, resolver, prov,
+				beanFactory);
 		assertThat(retryTopicConfigurer).isNotNull();
 	}
 
@@ -180,7 +194,13 @@ class RetryTopicConfigurationSupportTests {
 			}
 
 		};
-		KafkaConsumerBackoffManager backoffManager = support.kafkaConsumerBackoffManager(ctx, registry, null,
+		@SuppressWarnings("unchecked")
+		ObjectProvider<RetryTopicComponentFactory> prov = mock(ObjectProvider.class);
+		willAnswer(inv -> {
+			Supplier<RetryTopicComponentFactory> sup = inv.getArgument(0);
+			return sup.get();
+		}).given(prov).getIfUnique(any());
+		KafkaConsumerBackoffManager backoffManager = support.kafkaConsumerBackoffManager(ctx, registry, prov, null,
 				taskSchedulerMock);
 		assertThat(backoffManager).isEqualTo(backoffManagerMock);
 		then(componentFactory).should().kafkaBackOffManagerFactory(registry, ctx);
@@ -193,7 +213,13 @@ class RetryTopicConfigurationSupportTests {
 		TaskScheduler scheduler = mock(TaskScheduler.class);
 		ApplicationContext ctx = mock(ApplicationContext.class);
 		RetryTopicConfigurationSupport support = new RetryTopicConfigurationSupport();
-		KafkaConsumerBackoffManager backoffManager = support.kafkaConsumerBackoffManager(ctx, registry, null,
+		@SuppressWarnings("unchecked")
+		ObjectProvider<RetryTopicComponentFactory> prov = mock(ObjectProvider.class);
+		willAnswer(inv -> {
+			Supplier<RetryTopicComponentFactory> sup = inv.getArgument(0);
+			return sup.get();
+		}).given(prov).getIfUnique(any());
+		KafkaConsumerBackoffManager backoffManager = support.kafkaConsumerBackoffManager(ctx, registry, prov, null,
 				scheduler);
 		assertThat(backoffManager).isNotNull();
 	}
@@ -221,7 +247,14 @@ class RetryTopicConfigurationSupportTests {
 				nonBlockingRetries.remove(ConversionException.class);
 			}
 		};
-		DefaultDestinationTopicResolver resolver = (DefaultDestinationTopicResolver) support.destinationTopicResolver();
+		@SuppressWarnings("unchecked")
+		ObjectProvider<RetryTopicComponentFactory> prov = mock(ObjectProvider.class);
+		willAnswer(inv -> {
+			Supplier<RetryTopicComponentFactory> sup = inv.getArgument(0);
+			return sup.get();
+		}).given(prov).getIfUnique(any());
+		DefaultDestinationTopicResolver resolver = (DefaultDestinationTopicResolver) support
+				.destinationTopicResolver(prov);
 		assertThat(resolver).isEqualTo(resolverMock);
 		then(dtrConsumer).should().accept(resolverMock);
 		ArgumentCaptor<Map<Class<? extends Throwable>, Boolean>> captor = ArgumentCaptor.forClass(Map.class);
@@ -232,8 +265,13 @@ class RetryTopicConfigurationSupportTests {
 	@Test
 	void testCreateDestinationTopicResolverNoConfiguration() {
 		RetryTopicConfigurationSupport support = new RetryTopicConfigurationSupport();
-		DestinationTopicResolver resolver = support.destinationTopicResolver();
+		@SuppressWarnings("unchecked")
+		ObjectProvider<RetryTopicComponentFactory> prov = mock(ObjectProvider.class);
+		RetryTopicComponentFactory factory = spy(new RetryTopicComponentFactory());
+		given(prov.getIfUnique(any())).willReturn(factory);
+		DestinationTopicResolver resolver = support.destinationTopicResolver(prov);
 		assertThat(resolver).isNotNull();
+		verify(factory).destinationTopicResolver();
 	}
 
 	@Test
@@ -242,4 +280,22 @@ class RetryTopicConfigurationSupportTests {
 		assertThat(configurationSupport).hasFieldOrProperty("componentFactory").isNotNull();
 	}
 
+	@Test
+	void twoSupports() {
+		RetryTopicConfigurationSupport configurationSupport = new RetryTopicConfigurationSupport();
+		LogAccessor logger = spy(KafkaTestUtils.getPropertyValue(configurationSupport, "logger", LogAccessor.class));
+		new DirectFieldAccessor(configurationSupport).setPropertyValue("logger", logger);
+		ApplicationContext ctx = mock(ApplicationContext.class);
+		configurationSupport.setApplicationContext(ctx);
+		Map<String, RetryTopicConfigurationSupport> beans = new LinkedHashMap<>();
+		beans.put("foo", configurationSupport);
+		beans.put("bar", configurationSupport);
+		given(ctx.getBeansOfType(RetryTopicConfigurationSupport.class, false, false)).willReturn(beans);
+		configurationSupport.afterSingletonsInstantiated();
+		@SuppressWarnings("unchecked")
+		ArgumentCaptor<Supplier<String>> captor = ArgumentCaptor.forClass(Supplier.class);
+		verify(logger).warn(captor.capture());
+		assertThat(captor.getValue().get()).isEqualTo("Only one RetryTopicConfigurationSupport object expected, found "
+				+ "[foo, bar]; this may result in unexpected behavior");
+	}
 }

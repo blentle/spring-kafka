@@ -23,6 +23,12 @@ See <<exactly-once>> and https://cwiki.apache.org/confluence/display/KAFKA/KIP-4
 Enabling observation for timers and tracing using Micrometer is now supported.
 See <<observation>> for more information.
 
+[[x30-Native]]
+==== Native Images
+
+Support for creating native images is provided.
+See <<native-images>> for more information.
+
 [[x30-global-embedded-kafka]]
 ==== Global Single Embedded Kafka
 
@@ -42,15 +48,24 @@ You can now set a different `concurrency` for the retry containers; by default, 
 
 See <<retry-config>> for more information.
 
+The default replication factor for the retry topics is now `-1` (use broker default).
+If your broker is earlier that version 2.4, you will now need to explicitly set the property.
+
 You can now configure multiple `@RetryableTopic` listeners on the same topic in the same application context.
 Previously, this was not possible.
 See <<multi-retry>> for more information.
+
+There are breaking API changes in `RetryTopicConfigurationSupport`; specifically, if you override the bean definition methods for `destinationTopicResolver`, `kafkaConsumerBackoffManager` and/or `retryTopicConfigurer`;
+these methods now require an `ObjectProvider<RetryTopicComponentFactory>` parameter.
 
 [[x30-lc-changes]]
 ==== Listener Container Changes
 
 Events related to consumer authentication and authorization failures are now published by the container.
 See <<events>> for more information.
+
+You can now customize the thread names used by consumer threads.
+See <<container-thread-naming>> for more information.
 
 [[x30-template-changes]]
 ==== `KafkaTemplate` Changes
