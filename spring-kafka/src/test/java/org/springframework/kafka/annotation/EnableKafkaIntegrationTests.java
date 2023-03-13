@@ -1,5 +1,5 @@
 /*
- * Copyright 2016-2022 the original author or authors.
+ * Copyright 2016-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -651,6 +651,11 @@ public class EnableKafkaIntegrationTests {
 		assertThat(list.get(0)).isInstanceOf(Message.class);
 		Message<?> m = (Message<?>) list.get(0);
 		assertThat(m.getPayload()).isInstanceOf(String.class);
+		assertThat(this.listener.latch14a.await(10, TimeUnit.SECONDS)).isTrue();
+		assertThat(this.listener.payload2).isInstanceOf(List.class);
+		list = (List<?>) this.listener.payload2;
+		assertThat(list.size()).isGreaterThan(0);
+		assertThat(list.get(0)).isInstanceOf(Message.class);
 	}
 
 	@Test
@@ -1091,7 +1096,7 @@ public class EnableKafkaIntegrationTests {
 				}
 			});
 			factory.getContainerProperties().setMicrometerTags(Collections.singletonMap("extraTag", "foo"));
-			factory.setMessageConverter(new RecordMessageConverter() {
+			factory.setRecordMessageConverter(new RecordMessageConverter() {
 
 				@Override
 				public Message<?> toMessage(ConsumerRecord<?, ?> record, Acknowledgment acknowledgment,
@@ -1137,7 +1142,7 @@ public class EnableKafkaIntegrationTests {
 			DefaultJackson2JavaTypeMapper typeMapper = new DefaultJackson2JavaTypeMapper();
 			typeMapper.addTrustedPackages("*");
 			converter.setTypeMapper(typeMapper);
-			factory.setMessageConverter(converter);
+			factory.setRecordMessageConverter(converter);
 			return factory;
 		}
 
@@ -1154,7 +1159,7 @@ public class EnableKafkaIntegrationTests {
 			typeMapper.addTrustedPackages("*");
 			typeMapper.setTypePrecedence(TypePrecedence.TYPE_ID);
 			converter.setTypeMapper(typeMapper);
-			factory.setMessageConverter(converter);
+			factory.setRecordMessageConverter(converter);
 			return factory;
 		}
 
@@ -1167,7 +1172,7 @@ public class EnableKafkaIntegrationTests {
 			DefaultJackson2JavaTypeMapper typeMapper = new DefaultJackson2JavaTypeMapper();
 			typeMapper.addTrustedPackages("*");
 			converter.setTypeMapper(typeMapper);
-			factory.setMessageConverter(new ProjectingMessageConverter(converter));
+			factory.setRecordMessageConverter(new ProjectingMessageConverter(converter));
 			factory.setChangeConsumerThreadName(true);
 			factory.setThreadNameSupplier(container -> "foo." + container.getListenerId());
 			return factory;
@@ -1807,6 +1812,8 @@ public class EnableKafkaIntegrationTests {
 
 		final CountDownLatch latch14 = new CountDownLatch(1);
 
+		final CountDownLatch latch14a = new CountDownLatch(1);
+
 		final CountDownLatch latch15 = new CountDownLatch(1);
 
 		final CountDownLatch latch16 = new CountDownLatch(1);
@@ -1844,6 +1851,8 @@ public class EnableKafkaIntegrationTests {
 		volatile Acknowledgment ack;
 
 		volatile Object payload;
+
+		volatile Object payload2;
 
 		volatile Exception validationException;
 
@@ -2081,6 +2090,12 @@ public class EnableKafkaIntegrationTests {
 		public void listen14(List<Message<?>> list) {
 			this.payload = list;
 			this.latch14.countDown();
+		}
+
+		@KafkaListener(id = "list5a", topics = "annotated18", containerFactory = "batchFactory")
+		public void listen14a(List<? extends Message<?>> list) {
+			this.payload2 = list;
+			this.latch14a.countDown();
 		}
 
 		@KafkaListener(id = "list6", topics = "annotated19", containerFactory = "batchManualFactory2")

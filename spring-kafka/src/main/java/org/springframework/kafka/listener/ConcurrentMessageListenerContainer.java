@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2022 the original author or authors.
+ * Copyright 2015-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,6 +36,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.core.task.AsyncTaskExecutor;
 import org.springframework.core.task.SimpleAsyncTaskExecutor;
 import org.springframework.kafka.core.ConsumerFactory;
+import org.springframework.kafka.event.ConsumerStoppedEvent.Reason;
 import org.springframework.kafka.support.TopicPartitionOffset;
 import org.springframework.lang.Nullable;
 import org.springframework.util.Assert;
@@ -64,9 +65,13 @@ public class ConcurrentMessageListenerContainer<K, V> extends AbstractMessageLis
 
 	private final List<AsyncTaskExecutor> executors = new ArrayList<>();
 
+	private final AtomicInteger stoppedContainers = new AtomicInteger();
+
 	private int concurrency = 1;
 
 	private boolean alwaysClientIdSuffix = true;
+
+	private volatile Reason reason;
 
 	/**
 	 * Construct an instance with the supplied configuration properties.
@@ -344,6 +349,23 @@ public class ConcurrentMessageListenerContainer<K, V> extends AbstractMessageLis
 	}
 
 	@Override
+	public void childStopped(MessageListenerContainer child, Reason reason) {
+		synchronized (this.lifecycleMonitor) {
+			if (this.reason == null || reason.equals(Reason.AUTH)) {
+				this.reason = reason;
+			}
+			if (Reason.AUTH.equals(this.reason)
+					&& getContainerProperties().isRestartAfterAuthExceptions()
+					&& this.concurrency == this.stoppedContainers.incrementAndGet()) {
+
+				this.reason = null;
+				this.stoppedContainers.set(0);
+				doStart();
+			}
+		}
+	}
+
+	@Override
 	public void pause() {
 		synchronized (this.lifecycleMonitor) {
 			super.pause();
@@ -374,7 +396,7 @@ public class ConcurrentMessageListenerContainer<K, V> extends AbstractMessageLis
 		synchronized (this.lifecycleMonitor) {
 			this.containers
 					.stream()
-					.filter(container -> containsPartition(topicPartition, container))
+					.filter(container -> container.isPartitionPauseRequested(topicPartition))
 					.forEach(container -> container.resumePartition(topicPartition));
 		}
 	}
