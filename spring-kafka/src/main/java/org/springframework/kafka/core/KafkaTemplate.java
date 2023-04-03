@@ -28,6 +28,7 @@ import java.util.Properties;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
+import java.util.function.Function;
 
 import org.apache.commons.logging.LogFactory;
 import org.apache.kafka.clients.admin.AdminClientConfig;
@@ -148,6 +149,10 @@ public class KafkaTemplate<K, V> implements KafkaOperations<K, V>, ApplicationCo
 
 	private ObservationRegistry observationRegistry = ObservationRegistry.NOOP;
 
+	@Nullable
+	private Function<ProducerRecord<?, ?>, Map<String, String>> micrometerTagsProvider;
+
+	@Nullable
 	private KafkaAdmin kafkaAdmin;
 
 	private String clusterId;
@@ -362,6 +367,33 @@ public class KafkaTemplate<K, V> implements KafkaOperations<K, V>, ApplicationCo
 	}
 
 	/**
+	 * Set a function to provide dynamic tags based on the producer record. These tags
+	 * will be added to any static tags provided in {@link #setMicrometerTags(Map)
+	 * micrometerTags}. Only applies to record listeners, ignored for batch listeners.
+	 * Does not apply if observation is enabled.
+	 * @param micrometerTagsProvider the micrometerTagsProvider.
+	 * @since 2.9.8
+	 * @see #setMicrometerEnabled(boolean)
+	 * @see #setMicrometerTags(Map)
+	 * @see #setObservationEnabled(boolean)
+	 */
+	public void setMicrometerTagsProvider(
+			@Nullable Function<ProducerRecord<?, ?>, Map<String, String>> micrometerTagsProvider) {
+
+		this.micrometerTagsProvider = micrometerTagsProvider;
+	}
+
+	/**
+	 * Return the Micrometer tags provider.
+	 * @return the micrometerTagsProvider.
+	 * @since 2.9.8
+	 */
+	@Nullable
+	public Function<ProducerRecord<?, ?>, Map<String, String>> getMicrometerTagsProvider() {
+		return this.micrometerTagsProvider;
+	}
+
+	/**
 	 * Return the producer factory used by this template.
 	 * @return the factory.
 	 * @since 2.2.5
@@ -419,22 +451,44 @@ public class KafkaTemplate<K, V> implements KafkaOperations<K, V>, ApplicationCo
 		this.observationConvention = observationConvention;
 	}
 
+	/**
+	 * Return the {@link KafkaAdmin}, used to find the cluster id for observation, if
+	 * present.
+	 * @return the kafkaAdmin
+	 * @since 3.0.5
+	 */
+	@Nullable
+	public KafkaAdmin getKafkaAdmin() {
+		return this.kafkaAdmin;
+	}
+
+	/**
+	 * Set the {@link KafkaAdmin}, used to find the cluster id for observation, if
+	 * present.
+	 * @param kafkaAdmin the admin.
+	 */
+	public void setKafkaAdmin(KafkaAdmin kafkaAdmin) {
+		this.kafkaAdmin = kafkaAdmin;
+	}
+
 	@Override
 	public void afterSingletonsInstantiated() {
 		if (this.observationEnabled && this.applicationContext != null) {
 			this.observationRegistry = this.applicationContext.getBeanProvider(ObservationRegistry.class)
 					.getIfUnique(() -> this.observationRegistry);
-			this.kafkaAdmin = this.applicationContext.getBeanProvider(KafkaAdmin.class).getIfUnique();
-			if (this.kafkaAdmin != null) {
-				Object producerServers = this.producerFactory.getConfigurationProperties()
-						.get(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG);
-				String adminServers = this.kafkaAdmin.getBootstrapServers();
-				if (!producerServers.equals(adminServers)) {
-					Map<String, Object> props = new HashMap<>(this.kafkaAdmin.getConfigurationProperties());
-					props.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, producerServers);
-					int opTo = this.kafkaAdmin.getOperationTimeout();
-					this.kafkaAdmin = new KafkaAdmin(props);
-					this.kafkaAdmin.setOperationTimeout(opTo);
+			if (this.kafkaAdmin == null) {
+				this.kafkaAdmin = this.applicationContext.getBeanProvider(KafkaAdmin.class).getIfUnique();
+				if (this.kafkaAdmin != null) {
+					Object producerServers = this.producerFactory.getConfigurationProperties()
+							.get(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG);
+					String adminServers = this.kafkaAdmin.getBootstrapServers();
+					if (!producerServers.equals(adminServers)) {
+						Map<String, Object> props = new HashMap<>(this.kafkaAdmin.getConfigurationProperties());
+						props.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, producerServers);
+						int opTo = this.kafkaAdmin.getOperationTimeout();
+						this.kafkaAdmin = new KafkaAdmin(props);
+						this.kafkaAdmin.setOperationTimeout(opTo);
+					}
 				}
 			}
 		}
@@ -761,9 +815,7 @@ public class KafkaTemplate<K, V> implements KafkaOperations<K, V>, ApplicationCo
 			}
 			try {
 				if (exception == null) {
-					if (sample != null) {
-						this.micrometerHolder.success(sample);
-					}
+					successTimer(sample, producerRecord);
 					observation.stop();
 					future.complete(new SendResult<>(producerRecord, metadata));
 					if (KafkaTemplate.this.producerListener != null) {
@@ -773,9 +825,7 @@ public class KafkaTemplate<K, V> implements KafkaOperations<K, V>, ApplicationCo
 							+ ", metadata: " + metadata);
 				}
 				else {
-					if (sample != null) {
-						this.micrometerHolder.failure(sample, exception.getClass().getSimpleName());
-					}
+					failureTimer(sample, exception, producerRecord);
 					observation.error(exception);
 					observation.stop();
 					future.completeExceptionally(
@@ -793,6 +843,28 @@ public class KafkaTemplate<K, V> implements KafkaOperations<K, V>, ApplicationCo
 				}
 			}
 		};
+	}
+
+	private void successTimer(@Nullable Object sample, ProducerRecord<?, ?> record) {
+		if (sample != null) {
+			if (this.micrometerTagsProvider == null) {
+				this.micrometerHolder.success(sample);
+			}
+			else {
+				this.micrometerHolder.success(sample, record);
+			}
+		}
+	}
+
+	private void failureTimer(@Nullable Object sample, Exception exception, ProducerRecord<?, ?> record) {
+		if (sample != null) {
+			if (this.micrometerTagsProvider == null) {
+				this.micrometerHolder.failure(sample, exception.getClass().getSimpleName());
+			}
+			else {
+				this.micrometerHolder.failure(sample, exception.getClass().getSimpleName(), record);
+			}
+		}
 	}
 
 
@@ -852,9 +924,18 @@ public class KafkaTemplate<K, V> implements KafkaOperations<K, V>, ApplicationCo
 		MicrometerHolder holder = null;
 		try {
 			if (KafkaUtils.MICROMETER_PRESENT) {
+				Function<Object, Map<String, String>> mergedProvider = cr -> this.micrometerTags;
+				if (this.micrometerTagsProvider != null) {
+					mergedProvider = cr -> {
+						Map<String, String> tags = new HashMap<>(this.micrometerTags);
+						if (cr != null) {
+							tags.putAll(this.micrometerTagsProvider.apply((ProducerRecord<?, ?>) cr));
+						}
+						return tags;
+					};
+				}
 				holder = new MicrometerHolder(this.applicationContext, this.beanName,
-						"spring.kafka.template", "KafkaTemplate Timer",
-						this.micrometerTags);
+						"spring.kafka.template", "KafkaTemplate Timer", mergedProvider);
 			}
 		}
 		catch (@SuppressWarnings("unused") IllegalStateException ex) {

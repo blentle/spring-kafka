@@ -2532,6 +2532,14 @@ Also see `idleBeforeDataMultiplier`.
 |`true`
 |Whether or not to maintain Micrometer timers for the consumer threads.
 
+|[[micrometerTags]]<<micrometerTags,`micrometerTags`>>
+|empty
+|A map of static tags to be added to micrometer metrics.
+
+|[[micrometerTagsProvider]]<<micrometerTagsProvider,`micrometerTagsProvider`>>
+|`null`
+|A function that provides dynamic tags, based on the consumer record.
+
 |[[missingTopicsFatal]]<<missingTopicsFatal,`missingTopicsFatal`>>
 |`false`
 |When true prevents the container from starting if the confifgured topic(s) are not present on the broker.
@@ -3350,6 +3358,8 @@ The timers are named `spring.kafka.listener` and have the following tags:
 
 You can add additional tags using the `ContainerProperties` `micrometerTags` property.
 
+Starting with versions 2.9.8, 3.0.6, you can provide a function in `ContainerProperties` `micrometerTagsProvider`; the function receives the `ConsumerRecord<?, ?>` and returns tags which can be based on that record, and merged with any static tags in `micrometerTags`.
+
 NOTE: With the concurrent container, timers are created for each thread and the `name` tag is suffixed with `-n` where n is `0` to `concurrency-1`.
 
 ===== Monitoring KafkaTemplate Performance
@@ -3366,6 +3376,8 @@ The timers are named `spring.kafka.template` and have the following tags:
 * `exception` : `none` or the exception class name for failures
 
 You can add additional tags using the template's `micrometerTags` property.
+
+Starting with versions 2.9.8, 3.0.6, you can provide a `KafkaTemplate.setMicrometerTagsProvider(Function<ProducerRecord<?, ?>, Map<String, String>>)` property; the function receives the `ProducerRecord<?, ?>` and returns tags which can be based on that record, and merged with any static tags in `micrometerTags`.
 
 [[micrometer-native]]
 ===== Micrometer Native Metrics
@@ -3435,7 +3447,11 @@ The default implementations add the `bean.name` tag for template observations an
 
 You can either subclass `DefaultKafkaTemplateObservationConvention` or `DefaultKafkaListenerObservationConvention` or provide completely new implementations.
 
-See <<observation-gen>> for details of the observations that are recorded.
+See <<observation-gen>> for details of the default observations that are recorded.
+
+Starting with version 3.0.6, you can add dynamic tags to the timers and traces, based on information in the consumer or producer records.
+To do so, add a custom `KafkaListenerObservationConvention` and/or `KafkaTemplateObservationConvention` to the listener container properties or `KafkaTemplate` respectively.
+The `record` property in both observation contexts contains the `ConsumerRecord` or `ProducerRecord` respectively.
 
 [[transactions]]
 ==== Transactions
@@ -5481,10 +5497,10 @@ If you wish to use a different error handling strategy for record and batch list
 
 Refer to the javadocs in `CommonErrorHandler`.
 
-To replace an `ErrorHandler` or `ConsumerAwareErrorHandler` implementation, you should implement `handleRecord()` and leave `remainingRecords()` to return `false` (default).
+To replace an `ErrorHandler` or `ConsumerAwareErrorHandler` implementation, you should implement `handleOne()` and leave `seeksAfterHandle()` to return `false` (default).
 You should also implement `handleOtherException()` - to handle exceptions that occur outside the scope of record processing (e.g. consumer errors).
 
-To replace a `RemainingRecordsErrorHandler` implementation, you should implement `handleRemaining()`  and override `remainingRecords()` to return `true`.
+To replace a `RemainingRecordsErrorHandler` implementation, you should implement `handleRemaining()`  and override `seeksAfterHandle()` to return `true` (the error handler must perform the necessary seeks).
 You should also implement `handleOtherException()` - to handle exceptions that occur outside the scope of record processing (e.g. consumer errors).
 
 To replace any `BatchErrorHandler` implementation, you should implement `handleBatch()`
