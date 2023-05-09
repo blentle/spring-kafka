@@ -121,10 +121,8 @@ public class KafkaRuntimeHints implements RuntimeHintsRegistrar {
 					KafkaResourceFactory.class,
 					KafkaTemplate.class,
 					ProducerFactory.class,
-					KafkaOperations.class,
 					ConsumerFactory.class,
 					LoggingProducerListener.class,
-					ImplicitLinkedHashCollection.Element.class,
 					KafkaListenerAnnotationBeanPostProcessor.class)
 				.forEach(type -> reflectionHints.registerType(type,
 						builder -> builder.withMembers(MemberCategory.INVOKE_DECLARED_CONSTRUCTORS,
@@ -133,8 +131,7 @@ public class KafkaRuntimeHints implements RuntimeHintsRegistrar {
 
 		Stream.of(
 					KafkaBootstrapConfiguration.class,
-					CreatableTopic.class,
-					KafkaListenerEndpointRegistry.class)
+					CreatableTopic.class)
 				.forEach(type -> reflectionHints.registerType(type,
 						builder -> builder.withMembers(MemberCategory.INVOKE_DECLARED_CONSTRUCTORS)));
 
